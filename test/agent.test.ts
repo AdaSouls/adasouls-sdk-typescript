@@ -113,3 +113,18 @@ describe("Agent.execute()", () => {
     expect(get).not.toHaveBeenCalled();
   });
 });
+
+describe("Agent.checkPolicy()", () => {
+  it("posts to /agents/:id/check-policy and returns the evaluation without throwing on a denial", async () => {
+    const post = vi.fn().mockResolvedValue({ allowed: false, reasons: ["exceeds limit"], approvalsRequired: [] });
+    const agent = new Agent(fakeClient({ post }), "agent_1");
+
+    const result = await agent.checkPolicy({ capability: "pay", amount: "999999", asset: "USDC" });
+
+    expect(result).toEqual({ allowed: false, reasons: ["exceeds limit"], approvalsRequired: [] });
+    expect(post).toHaveBeenCalledWith(
+      "/agents/agent_1/check-policy",
+      expect.objectContaining({ intent: expect.objectContaining({ capability: "pay", amount: "999999" }) })
+    );
+  });
+});

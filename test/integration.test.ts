@@ -72,4 +72,16 @@ describe.skipIf(!baseUrl || !apiKey || !agentId)("SDK integration (real adasouls
     const agent = adasouls.agent(agentId!);
     await expect(agent.execute({ capability: "hire", amount: "1", asset: "USDC" })).rejects.toThrow(AdaSoulsNoDelegationError);
   });
+
+  it("checkPolicy() evaluates without creating an EconomicAction", async () => {
+    const adasouls = new AdaSouls({ apiKey: apiKey!, baseUrl });
+    const agent = adasouls.agent(agentId!);
+
+    const before = await agent.history({ limit: 100 });
+    const result = await agent.checkPolicy({ capability: "pay", amount: "1", asset: "USDC" });
+    const after = await agent.history({ limit: 100 });
+
+    expect(result.allowed).toBe(true);
+    expect(after.items.length).toBe(before.items.length);
+  });
 });

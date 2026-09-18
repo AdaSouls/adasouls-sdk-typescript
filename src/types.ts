@@ -102,6 +102,16 @@ export interface ExecuteInput {
   wait?: boolean;
 }
 
+export interface CheckPolicyInput {
+  capability: string;
+  amount?: string;
+  asset?: string;
+  to?: string;
+  detail?: Record<string, unknown>;
+  counterparty?: Record<string, unknown>;
+  dailySpendSoFar?: Record<string, string>;
+}
+
 export interface ListEconomicActionsOptions {
   cursor?: string;
   limit?: number;

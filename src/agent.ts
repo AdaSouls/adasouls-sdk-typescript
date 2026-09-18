@@ -5,10 +5,12 @@ import type {
   AgentAuthority,
   AgentIdentity,
   AgentReputation,
+  CheckPolicyInput,
   EconomicAction,
   ExecuteInput,
   ListEconomicActionsOptions,
   ListEconomicActionsResult,
+  PolicyEvaluation,
 } from "./types.js";
 
 /** A handle bound to one agentId -- `adasouls.agent("agent_123")`, per 06-api-contracts.md's SDK semantics. */
@@ -32,6 +34,26 @@ export class Agent {
       agentId: this.id,
       cursor: options.cursor,
       limit: options.limit,
+    });
+  }
+
+  /**
+   * "Would executing this intent be allowed right now" -- evaluates
+   * every policy currently applicable to the agent, without creating an
+   * EconomicAction. Never throws on a policy denial (unlike execute());
+   * inspect `.allowed`/`.reasons`/`.approvalsRequired` on the result.
+   */
+  async checkPolicy(input: CheckPolicyInput): Promise<PolicyEvaluation> {
+    return this.client.post<PolicyEvaluation>(`/agents/${encodeURIComponent(this.id)}/check-policy`, {
+      intent: {
+        capability: input.capability,
+        amount: input.amount,
+        asset: input.asset,
+        to: input.to,
+        detail: input.detail,
+      },
+      counterparty: input.counterparty,
+      dailySpendSoFar: input.dailySpendSoFar,
     });
   }
 
