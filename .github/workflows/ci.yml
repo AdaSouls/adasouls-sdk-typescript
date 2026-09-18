@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      # Only the mocked/contract suite runs here -- test/integration.test.ts
+      # skips itself unless ADASOULS_API_URL (+ fixture env vars) is set,
+      # which needs a real running adasouls-api. There's no deployed `dev`
+      # environment yet to point CI at (Phase 0's ECS pipeline is still
+      # deferred) -- same gap as adasouls-engine/provider-adapters'
+      # *.testnet.test.ts not running in its CI either. Revisit once one
+      # exists.
+      - run: npm test
