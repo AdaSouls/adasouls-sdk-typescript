@@ -53,7 +53,6 @@ export class Agent {
         detail: input.detail,
       },
       counterparty: input.counterparty,
-      dailySpendSoFar: input.dailySpendSoFar,
     });
   }
 
