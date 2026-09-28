@@ -88,13 +88,22 @@ export interface EconomicAction {
   createdAt: string;
 }
 
+/**
+ * Who the agent would transact with. Only the id: AdaSouls computes the
+ * counterparty's record (completed transactions, disputes) from receipts;
+ * anything a caller claims about it would be ignored.
+ */
+export interface CounterpartyRef {
+  id: string;
+}
+
 export interface ExecuteInput {
   capability: string;
   amount?: string;
   asset?: string;
   to?: string;
   detail?: Record<string, unknown>;
-  counterparty?: Record<string, unknown>;
+  counterparty?: CounterpartyRef;
   /** Resolved automatically via GET /agents/:id/authority when omitted -- see Agent.execute()'s doc comment. */
   delegationId?: string;
   idempotencyKey?: string;
@@ -108,8 +117,7 @@ export interface CheckPolicyInput {
   asset?: string;
   to?: string;
   detail?: Record<string, unknown>;
-  counterparty?: Record<string, unknown>;
-  dailySpendSoFar?: Record<string, string>;
+  counterparty?: CounterpartyRef;
 }
 
 export interface ListEconomicActionsOptions {

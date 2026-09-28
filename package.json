@@ -1,7 +1,16 @@
 {
   "name": "@adasouls/sdk",
   "version": "0.1.0",
-  "description": "The public AdaSouls TypeScript SDK -- a typed client over adasouls-api's REST surface, giving customer agent runtimes a domain-verb API (agent.pay(), not a raw provider call).",
+  "description": "TypeScript SDK for AdaSouls: a typed, zero-dependency client over the AdaSouls API that gives agent runtimes a domain-verb API (agent.execute({ capability: 'pay', ... })).",
+  "license": "MIT",
+  "homepage": "https://github.com/AdaSouls/adasouls-sdk-typescript#readme",
+  "keywords": [
+    "adasouls",
+    "alma",
+    "ai-agents",
+    "agent-payments",
+    "sdk"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,7 +20,12 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/AdaSouls/adasouls-sdk-typescript.git"
@@ -23,9 +37,14 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "npm run build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.1",
     "@types/node": "^22.7.0",
     "eslint": "^9.14.0",
     "typescript": "^5.6.0",
