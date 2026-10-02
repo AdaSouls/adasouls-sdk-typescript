@@ -133,7 +133,8 @@ export interface TestConnectionResult {
   ok: boolean;
   /** Why the test failed, in the order the checks run. Empty when ok. */
   reasons: string[];
-  checks: { credential: boolean; authority: boolean; policies: boolean };
+  /** `wallet`: the agent has a wallet connected (reported by APIs with per-agent wallet connections). */
+  checks: { credential: boolean; authority: boolean; policies: boolean; wallet?: boolean };
   /** The simulated action recorded for this test, when one was created. */
   economicActionId: string | null;
   /** This runtime's AgentInstance, when the test passed. */
