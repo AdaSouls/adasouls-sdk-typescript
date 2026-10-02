@@ -120,6 +120,28 @@ export interface CheckPolicyInput {
   counterparty?: CounterpartyRef;
 }
 
+export interface TestConnectionInput {
+  /** What this runtime calls itself, e.g. "treasury-bot@prod". Shown to the agent's owners; never used to decide anything. */
+  runtime: string;
+  /** Defaults to the first capability of the agent's first active delegation. */
+  capability?: string;
+  /** Defaults to "USDC". */
+  asset?: string;
+}
+
+export interface TestConnectionResult {
+  ok: boolean;
+  /** Why the test failed, in the order the checks run. Empty when ok. */
+  reasons: string[];
+  checks: { credential: boolean; authority: boolean; policies: boolean };
+  /** The simulated action recorded for this test, when one was created. */
+  economicActionId: string | null;
+  /** This runtime's AgentInstance, when the test passed. */
+  instanceId: string | null;
+  /** The agent's lifecycle status after the test. */
+  status: string;
+}
+
 export interface ListEconomicActionsOptions {
   cursor?: string;
   limit?: number;

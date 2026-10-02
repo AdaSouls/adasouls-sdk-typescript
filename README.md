@@ -30,6 +30,11 @@ await agent.identity();
 await agent.reputation();
 await agent.authority();
 
+// Connecting an agent: prove this runtime holds a working key and passes
+// the authority and policy checks, with a simulated action of amount 0.
+const test = await agent.testConnection({ runtime: "treasury-bot@prod" });
+if (!test.ok) console.error(test.reasons);
+
 // Would this be allowed right now? Nothing is created.
 await agent.checkPolicy({ capability: "pay", amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
 

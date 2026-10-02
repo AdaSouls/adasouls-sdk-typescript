@@ -11,6 +11,8 @@ import type {
   ListEconomicActionsOptions,
   ListEconomicActionsResult,
   PolicyEvaluation,
+  TestConnectionInput,
+  TestConnectionResult,
 } from "./types.js";
 
 /** A handle bound to one agentId -- `adasouls.agent("agent_123")`, per 06-api-contracts.md's SDK semantics. */
@@ -53,6 +55,25 @@ export class Agent {
         detail: input.detail,
       },
       counterparty: input.counterparty,
+    });
+  }
+
+  /**
+   * The "test connection" step of connecting an agent: proves this
+   * runtime holds a working key for the agent, and runs a simulated
+   * action of amount 0 through the same authority and policy checks a
+   * real one gets. Nothing is paid and no reputation is added.
+   *
+   * Only works with the agent's own key (not an org-wide key). Never
+   * throws on a failed test: inspect `.ok` and `.reasons`. On success
+   * the runtime is recorded as attached to the agent, and a person can
+   * then activate it in the console.
+   */
+  async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+    return this.client.post<TestConnectionResult>(`/agents/${encodeURIComponent(this.id)}/test-connection`, {
+      runtime: input.runtime,
+      capability: input.capability,
+      asset: input.asset,
     });
   }
 

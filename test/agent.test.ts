@@ -128,3 +128,14 @@ describe("Agent.checkPolicy()", () => {
     );
   });
 });
+
+describe("Agent.testConnection()", () => {
+  it("posts the runtime label to /agents/:id/test-connection and returns the result without throwing on a failed test", async () => {
+    const failed = { ok: false, reasons: ["no policy applies to this agent"], checks: { credential: true, authority: true, policies: false }, economicActionId: null, instanceId: null, status: "identity_issued" };
+    const post = vi.fn().mockResolvedValue(failed);
+    const agent = new Agent(fakeClient({ post }), "alma:main:agent:x");
+
+    expect(await agent.testConnection({ runtime: "treasury-bot@prod" })).toEqual(failed);
+    expect(post).toHaveBeenCalledWith("/agents/alma%3Amain%3Aagent%3Ax/test-connection", { runtime: "treasury-bot@prod", capability: undefined, asset: undefined });
+  });
+});
