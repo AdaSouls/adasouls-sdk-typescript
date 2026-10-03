@@ -9,8 +9,15 @@ import type {
   EconomicAction,
   ExecuteInput,
   ListEconomicActionsOptions,
+  FindAgentsInput,
+  HireInput,
+  Listing,
   ListEconomicActionsResult,
+  MarketplaceJob,
+  PaymentInstruction,
   PolicyEvaluation,
+  TestConnectionInput,
+  TestConnectionResult,
 } from "./types.js";
 
 /** A handle bound to one agentId -- `adasouls.agent("agent_123")`, per 06-api-contracts.md's SDK semantics. */
@@ -53,6 +60,25 @@ export class Agent {
         detail: input.detail,
       },
       counterparty: input.counterparty,
+    });
+  }
+
+  /**
+   * The "test connection" step of connecting an agent: proves this
+   * runtime holds a working key for the agent, and runs a simulated
+   * action of amount 0 through the same authority and policy checks a
+   * real one gets. Nothing is paid and no reputation is added.
+   *
+   * Only works with the agent's own key (not an org-wide key). Never
+   * throws on a failed test: inspect `.ok` and `.reasons`. On success
+   * the runtime is recorded as attached to the agent, and a person can
+   * then activate it in the console.
+   */
+  async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+    return this.client.post<TestConnectionResult>(`/agents/${encodeURIComponent(this.id)}/test-connection`, {
+      runtime: input.runtime,
+      capability: input.capability,
+      asset: input.asset,
     });
   }
 
@@ -111,7 +137,70 @@ export class Agent {
     }
 
     const handle = new EconomicActionHandle(this.client, action);
-    return input.wait ? new EconomicActionHandle(this.client, await handle.wait()) : handle;
+    // An agent that pays by itself must pay and report first: there is nothing to wait for yet.
+    return input.wait && !handle.payment ? new EconomicActionHandle(this.client, await handle.wait()) : handle;
+  }
+
+  /** Reports the transaction for a payment this agent made from its own wallet (see EconomicActionHandle.payment). */
+  async reportPayment(economicActionId: string, txHash: string): Promise<EconomicActionHandle> {
+    const action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}/payment`, { txHash });
+    return new EconomicActionHandle(this.client, action);
+  }
+
+  // ---------- Marketplace ----------
+
+  /** Published listings of active agents, with each seller's record computed from verified receipts. */
+  async findAgents(input: FindAgentsInput = {}): Promise<Listing[]> {
+    const page = await this.client.get<{ items: Listing[] }>("/marketplace/listings", { capability: input.capability, q: input.q, limit: input.limit });
+    return page.items;
+  }
+
+  /**
+   * Hires a listed agent: pays the listed price (under this agent's own
+   * delegation and limits, like any payment) and, once it's paid,
+   * AdaSouls calls the seller and stores its answer.
+   *
+   * If this agent pays from its own wallet, `payment` says what to pay:
+   * send it, then `action.reportPayment(txHash)`. Then waitForJob() for
+   * the seller's answer. Throws AdaSoulsPolicyError if this agent's
+   * policies refuse the price, or AdaSoulsApprovalPending if a person
+   * must approve it first.
+   */
+  async hire(listingId: string, input: HireInput): Promise<{ job: MarketplaceJob; action: EconomicActionHandle; payment: PaymentInstruction | null }> {
+    const { job, action } = await this.client.post<{ job: MarketplaceJob; action: EconomicAction }>(`/marketplace/listings/${encodeURIComponent(listingId)}/hire`, {
+      agentId: this.id,
+      service: input.service,
+      input: input.input,
+    });
+    if (action.status === "rejected") {
+      throw new AdaSoulsPolicyError(action.policyEvaluation?.reasons.join("; ") || "policy denied this hire", action.policyEvaluation?.reasons ?? [], action.policyEvaluation?.approvalsRequired ?? []);
+    }
+    if (action.status === "pending_approval") {
+      throw new AdaSoulsApprovalPending(`hiring needs human approval (EconomicAction ${action.id}, job ${job.id})`, action.id, action.policyEvaluation?.approvalsRequired ?? []);
+    }
+    const handle = new EconomicActionHandle(this.client, action);
+    return { job, action: handle, payment: handle.payment };
+  }
+
+  /** One job this agent bought or sold. */
+  async job(jobId: string): Promise<MarketplaceJob> {
+    return this.client.get<MarketplaceJob>(`/marketplace/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  /** Polls a job until the seller answered (completed), or delivery or payment failed. Returns the last state seen on timeout. */
+  async waitForJob(jobId: string, options: { intervalMs?: number; timeoutMs?: number } = {}): Promise<MarketplaceJob> {
+    const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+    let job = await this.job(jobId);
+    while ((job.status === "awaiting_payment" || job.status === "paid") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, options.intervalMs ?? 1000));
+      job = await this.job(jobId);
+    }
+    return job;
+  }
+
+  /** Jobs this agent took part in, newest first. */
+  async jobs(role?: "buyer" | "seller"): Promise<MarketplaceJob[]> {
+    return (await this.client.get<{ items: MarketplaceJob[] }>(`/agents/${encodeURIComponent(this.id)}/marketplace/jobs`, { role })).items;
   }
 
   private async resolveDelegationId(capability: string): Promise<string> {

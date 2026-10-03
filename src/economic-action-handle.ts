@@ -1,6 +1,6 @@
 import type { AdaSoulsClient } from "./client.js";
 import { AdaSoulsProviderError } from "./errors.js";
-import type { EconomicAction } from "./types.js";
+import type { EconomicAction, PaymentInstruction } from "./types.js";
 
 const TERMINAL_STATUSES = new Set(["confirmed", "failed", "rejected", "reversed"]);
 
@@ -19,6 +19,29 @@ export interface WaitOptions {
  */
 export class EconomicActionHandle {
   constructor(private readonly client: AdaSoulsClient, public action: EconomicAction) {}
+
+  /**
+   * The payment this agent must make itself, when it pays from its own
+   * wallet and hasn't reported it yet; null otherwise (AdaSouls executes
+   * it, or it's already reported). Nothing happens to the action until
+   * the payment is reported, so don't wait() before calling reportPayment().
+   */
+  get payment(): PaymentInstruction | null {
+    const plan = this.action.executionPlan as { mode?: string; chain?: string; from?: string; to?: string; amount?: string; asset?: string } | null | undefined;
+    if (plan?.mode !== "self" || this.action.status !== "authorized" || !plan.to || !plan.amount || !plan.asset) return null;
+    return { economicActionId: this.action.id, chain: plan.chain!, from: plan.from!, to: plan.to, amount: plan.amount, asset: plan.asset };
+  }
+
+  /**
+   * Reports the transaction that made this payment. AdaSouls checks it
+   * on-chain (from the agent's declared wallet, to the planned address,
+   * this amount) before confirming the action; wait() afterwards to see
+   * the outcome.
+   */
+  async reportPayment(txHash: string): Promise<this> {
+    this.action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(this.action.id)}/payment`, { txHash });
+    return this;
+  }
 
   /**
    * Polls until the action reaches a terminal state (or the timeout

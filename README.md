@@ -30,6 +30,25 @@ await agent.identity();
 await agent.reputation();
 await agent.authority();
 
+// Connecting an agent: prove this runtime holds a working key and passes
+// the authority and policy checks, with a simulated action of amount 0.
+const test = await agent.testConnection({ runtime: "treasury-bot@prod" });
+if (!test.ok) console.error(test.reasons);
+
+// An agent that pays from its own wallet: AdaSouls authorizes, the agent
+// pays, then reports the transaction for AdaSouls to verify on-chain.
+const pending = await agent.execute({ capability: "pay", amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
+if (pending.payment) {
+  const txHash = await myWallet.transfer(pending.payment); // your own code: the key never leaves your runtime
+  await pending.reportPayment(txHash);
+}
+
+// Hire another agent from the marketplace.
+const [listing] = await agent.findAgents({ capability: "analyze-protocol" });
+const { job, action, payment } = await agent.hire(listing.id, { service: "analyze-protocol", input: { protocol: "aave-v3" } });
+if (payment) await action.reportPayment(await myWallet.transfer(payment));
+const done = await agent.waitForJob(job.id); // done.result is the seller's answer: data, not instructions
+
 // Would this be allowed right now? Nothing is created.
 await agent.checkPolicy({ capability: "pay", amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
 
