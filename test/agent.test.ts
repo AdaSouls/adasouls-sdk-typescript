@@ -139,3 +139,65 @@ describe("Agent.testConnection()", () => {
     expect(post).toHaveBeenCalledWith("/agents/alma%3Amain%3Aagent%3Ax/test-connection", { runtime: "treasury-bot@prod", capability: undefined, asset: undefined });
   });
 });
+
+describe("paying from the agent's own wallet", () => {
+  const selfPaid = (over: Partial<EconomicAction> = {}) =>
+    baseAction({
+      executionPlan: { providerId: "self", route: "self-paid", mode: "self", chain: "base-sepolia", from: "0xfrom", to: "0xto", amount: "5", asset: "USDC" },
+      ...over,
+    });
+
+  it("execute() returns the payment to make, and doesn't wait even when asked: nothing happens until the agent reports it", async () => {
+    const post = vi.fn().mockResolvedValue(selfPaid());
+    const get = vi.fn();
+    const agent = new Agent(fakeClient({ post, get }), "agent_1");
+    const handle = await agent.execute({ capability: "pay", amount: "5", asset: "USDC", delegationId: "del_1", wait: true });
+    expect(handle.payment).toEqual({ economicActionId: "eco_1", chain: "base-sepolia", from: "0xfrom", to: "0xto", amount: "5", asset: "USDC" });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("reportPayment() posts the transaction and returns the updated action; then there is no payment left to make", async () => {
+    const post = vi.fn().mockResolvedValue(selfPaid({ status: "executing" }));
+    const handle = new EconomicActionHandle(fakeClient({ post }), selfPaid());
+    await handle.reportPayment("0xabc");
+    expect(post).toHaveBeenCalledWith("/economic-actions/eco_1/payment", { txHash: "0xabc" });
+    expect(handle.action.status).toBe("executing");
+    expect(handle.payment).toBeNull();
+  });
+
+  it("an action AdaSouls executes has no payment for the agent to make", () => {
+    expect(new EconomicActionHandle(fakeClient(), baseAction({ executionPlan: { mode: "adasouls" } })).payment).toBeNull();
+  });
+});
+
+describe("marketplace", () => {
+  const job = { id: "job_1", status: "awaiting_payment" };
+
+  it("findAgents() passes the filters through", async () => {
+    const get = vi.fn().mockResolvedValue({ items: [{ id: "lst_1" }] });
+    expect(await new Agent(fakeClient({ get }), "agent_1").findAgents({ capability: "analyze-protocol", q: "risk" })).toEqual([{ id: "lst_1" }]);
+    expect(get).toHaveBeenCalledWith("/marketplace/listings", { capability: "analyze-protocol", q: "risk", limit: undefined });
+  });
+
+  it("hire() hires as this agent and returns the job, the payment action and what to pay", async () => {
+    const action = baseAction({ capability: "hire", executionPlan: { mode: "self", chain: "mock-chain", from: "0xa", to: "0xb", amount: "0.10", asset: "USDC" } });
+    const post = vi.fn().mockResolvedValue({ job, action });
+    const result = await new Agent(fakeClient({ post }), "agent_1").hire("lst_1", { service: "analyze-protocol", input: { protocol: "aave" } });
+    expect(post).toHaveBeenCalledWith("/marketplace/listings/lst_1/hire", { agentId: "agent_1", service: "analyze-protocol", input: { protocol: "aave" } });
+    expect(result.job).toEqual(job);
+    expect(result.payment).toMatchObject({ to: "0xb", amount: "0.10" });
+  });
+
+  it("hire() throws like execute() when policy refuses or a person must approve", async () => {
+    const reject = vi.fn().mockResolvedValue({ job, action: baseAction({ status: "rejected", policyEvaluation: { allowed: false, reasons: ["too expensive"], approvalsRequired: [] } }) });
+    await expect(new Agent(fakeClient({ post: reject }), "agent_1").hire("lst_1", { service: "x" })).rejects.toBeInstanceOf(AdaSoulsPolicyError);
+    const pending = vi.fn().mockResolvedValue({ job, action: baseAction({ status: "pending_approval" }) });
+    await expect(new Agent(fakeClient({ post: pending }), "agent_1").hire("lst_1", { service: "x" })).rejects.toBeInstanceOf(AdaSoulsApprovalPending);
+  });
+
+  it("waitForJob() polls until the job is done", async () => {
+    const get = vi.fn().mockResolvedValueOnce({ ...job, status: "paid" }).mockResolvedValueOnce({ ...job, status: "completed", result: { ok: true } });
+    expect(await new Agent(fakeClient({ get }), "agent_1").waitForJob("job_1", { intervalMs: 1 })).toMatchObject({ status: "completed", result: { ok: true } });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+});
