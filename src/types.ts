@@ -259,3 +259,22 @@ export interface AgentReports {
   treeHead: unknown;
   reports: AgentReport[];
 }
+
+/** Whether an agent is running, as far as it chooses to say. */
+export interface Presence {
+  agentId: string;
+  /** "signal": the agent sends online signals, so `online` means something. "activity": it never has; show `lastActivityAt`. */
+  mode: "signal" | "activity";
+  online: boolean;
+  lastSignalAt: string | null;
+  /** While online: when it stops being so unless another signal arrives. */
+  onlineUntil: string | null;
+  lastActivityAt: string | null;
+}
+
+export interface StayOnlineOptions {
+  /** Milliseconds between signals. Default 30000; AdaSouls counts a signal for 90 seconds. */
+  intervalMs?: number;
+  /** Called when a signal fails. The next one is still sent. */
+  onError?: (err: unknown) => void;
+}

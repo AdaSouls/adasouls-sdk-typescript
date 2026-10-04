@@ -6,8 +6,10 @@ import type {
   AgentAuthority,
   AgentReport,
   AgentReports,
+  Presence,
   ReportedMetrics,
   ReportSubject,
+  StayOnlineOptions,
   AgentIdentity,
   AgentReputation,
   CheckPolicyInput,
@@ -167,6 +169,36 @@ export class Agent {
   async reports(subject?: ReportSubject): Promise<AgentReports> {
     const query = !subject ? undefined : "action" in subject ? { about: "action", ref: subject.action } : { about: "job", ref: subject.job };
     return this.client.get<AgentReports>(`/agents/${encodeURIComponent(this.id)}/reports`, query);
+  }
+
+  // ---------- Presence ----------
+
+  /** Tells AdaSouls this agent is running right now. Optional; needs this agent's own api key. */
+  async signal(): Promise<Presence> {
+    return this.client.post<Presence>(`/agents/${encodeURIComponent(this.id)}/signal`);
+  }
+
+  /**
+   * Shows this agent as online for as long as the process runs: sends a
+   * signal now and then every `intervalMs`. Returns a function that
+   * stops it (the agent then goes offline when the last signal lapses).
+   * The timer doesn't keep the process alive on its own. An agent that
+   * never calls this isn't shown as offline, only by its last activity.
+   */
+  stayOnline(options: StayOnlineOptions = {}): () => void {
+    const intervalMs = options.intervalMs ?? 30_000;
+    if (!Number.isFinite(intervalMs) || intervalMs < 5_000) throw new TypeError("intervalMs must be at least 5000");
+    const beat = () => {
+      this.signal().catch((err) => options.onError?.(err));
+    };
+    beat();
+    const timer = setInterval(beat, intervalMs);
+    (timer as { unref?: () => void }).unref?.();
+    return () => clearInterval(timer);
+  }
+
+  async presence(): Promise<Presence> {
+    return this.client.get<Presence>(`/agents/${encodeURIComponent(this.id)}/presence`);
   }
 
   // ---------- Marketplace ----------

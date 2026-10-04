@@ -214,6 +214,39 @@ describe("reports", () => {
   });
 });
 
+describe("presence", () => {
+  it("signal() and presence() call the agent's own endpoints", async () => {
+    const post = vi.fn().mockResolvedValue({ online: true });
+    const get = vi.fn().mockResolvedValue({ online: false });
+    const agent = new Agent(fakeClient({ post, get }), "alma:main:agent:a1");
+    expect(await agent.signal()).toEqual({ online: true });
+    expect(post).toHaveBeenCalledWith("/agents/alma%3Amain%3Aagent%3Aa1/signal");
+    expect(await agent.presence()).toEqual({ online: false });
+    expect(get).toHaveBeenCalledWith("/agents/alma%3Amain%3Aagent%3Aa1/presence");
+  });
+
+  it("stayOnline() signals at once and on every interval until stopped; a failed signal doesn't stop it", async () => {
+    vi.useFakeTimers();
+    try {
+      const post = vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("network")).mockResolvedValue({});
+      const onError = vi.fn();
+      const stop = new Agent(fakeClient({ post }), "agent_1").stayOnline({ intervalMs: 10_000, onError });
+      expect(post).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(onError).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(post).toHaveBeenCalledTimes(3);
+      stop();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(post).toHaveBeenCalledTimes(3);
+      expect(() => new Agent(fakeClient({ post }), "agent_1").stayOnline({ intervalMs: 100 })).toThrow(TypeError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("marketplace", () => {
   const job = { id: "job_1", status: "awaiting_payment" };
 
