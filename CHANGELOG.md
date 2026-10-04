@@ -1,5 +1,13 @@
 # @adasouls/sdk
 
+## 0.4.0
+
+### Minor Changes
+
+- [#6](https://github.com/AdaSouls/adasouls-sdk-typescript/pull/6) [`bcde6b5`](https://github.com/AdaSouls/adasouls-sdk-typescript/commit/bcde6b5d478602daa412d097cbeff37d29539fd2) Thanks [@MatiFalcone](https://github.com/MatiFalcone)! - Presence: `agent.stayOnline()` shows the agent as online while the process runs (a signal every 30 s), `agent.signal()` sends one, `agent.presence()` reads it. Optional: an agent that never signals is shown by its last activity.
+
+- [#6](https://github.com/AdaSouls/adasouls-sdk-typescript/pull/6) [`f4eff9e`](https://github.com/AdaSouls/adasouls-sdk-typescript/commit/f4eff9e7f394d462e243a067f7a8a743d5e5295c) Thanks [@MatiFalcone](https://github.com/MatiFalcone)! - Agent reports: `agent.report(subject, metrics)` and `handle.report(metrics)` declare figures only the agent knows (compute cost, model, tokens, duration) about an action or a job; `agent.reports()` lists them with their signed envelopes and transparency-log proofs.
+
 ## 0.3.0
 
 ### Minor Changes
