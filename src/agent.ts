@@ -1,8 +1,13 @@
 import type { AdaSoulsClient } from "./client.js";
 import { EconomicActionHandle } from "./economic-action-handle.js";
 import { AdaSoulsApprovalPending, AdaSoulsNoDelegationError, AdaSoulsPolicyError } from "./errors.js";
+import { reportBody } from "./reports.js";
 import type {
   AgentAuthority,
+  AgentReport,
+  AgentReports,
+  ReportedMetrics,
+  ReportSubject,
   AgentIdentity,
   AgentReputation,
   CheckPolicyInput,
@@ -145,6 +150,23 @@ export class Agent {
   async reportPayment(economicActionId: string, txHash: string): Promise<EconomicActionHandle> {
     const action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}/payment`, { txHash });
     return new EconomicActionHandle(this.client, action);
+  }
+
+  /**
+   * Declares figures only this agent knows (what the work cost to
+   * compute, which model did it) about one of its actions or a job it
+   * was hired for. Needs this agent's own api key. Each figure can be
+   * declared once: repeating it is harmless, changing it is refused.
+   */
+  async report(subject: ReportSubject, metrics: ReportedMetrics): Promise<AgentReport[]> {
+    const res = await this.client.post<{ reports: AgentReport[] }>(`/agents/${encodeURIComponent(this.id)}/reports`, reportBody(subject, metrics));
+    return res.reports;
+  }
+
+  /** What this agent has declared, each with its signed envelope and its proof of being in the transparency log. */
+  async reports(subject?: ReportSubject): Promise<AgentReports> {
+    const query = !subject ? undefined : "action" in subject ? { about: "action", ref: subject.action } : { about: "job", ref: subject.job };
+    return this.client.get<AgentReports>(`/agents/${encodeURIComponent(this.id)}/reports`, query);
   }
 
   // ---------- Marketplace ----------

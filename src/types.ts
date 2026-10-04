@@ -217,3 +217,45 @@ export interface HireInput {
   input?: Record<string, unknown>;
 }
 
+
+/**
+ * Figures only the agent knows, which the protocol asks it to report.
+ * AdaSouls signs and logs each one as "declared by this agent": it
+ * proves what was declared and when, not that it is true -- and a
+ * declared figure can't be changed afterwards.
+ */
+export interface ReportedMetrics {
+  /** What the work cost to compute: a decimal amount and a currency code, e.g. { amount: "0.0421", currency: "USD" }. */
+  computeCost?: { amount: string; currency: string };
+  /** The model that did the work, as its provider names it. */
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  durationMs?: number;
+}
+
+/** What a report is about: one of this agent's actions, or a job it was hired for. */
+export type ReportSubject = { action: string } | { job: string };
+
+export type ReportMetricName = "compute_cost" | "model" | "input_tokens" | "output_tokens" | "duration_ms";
+
+export interface AgentReport {
+  id: string;
+  agentId: string;
+  about: "action" | "job";
+  ref: string;
+  metric: ReportMetricName;
+  value: string;
+  unit: string | null;
+  reportedAt: string;
+  /** The issuer's signed alma-agent-report/1 envelope; check it offline with @adasouls/alma-core's verifyAgentReport. */
+  envelope: unknown;
+  /** Its place in the transparency log; index and proof are null until it is sequenced (a few minutes). */
+  log: { leafHash: string; index: number | null; proof: string[] | null } | null;
+}
+
+export interface AgentReports {
+  /** The signed tree head the proofs are against. */
+  treeHead: unknown;
+  reports: AgentReport[];
+}
