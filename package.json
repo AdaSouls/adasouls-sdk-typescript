@@ -1,6 +1,6 @@
 {
   "name": "@adasouls/sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "TypeScript SDK for AdaSouls: a typed, zero-dependency client over the AdaSouls API that gives agent runtimes a domain-verb API (agent.execute({ capability: 'pay', ... })).",
   "license": "MIT",
   "homepage": "https://github.com/AdaSouls/adasouls-sdk-typescript#readme",
