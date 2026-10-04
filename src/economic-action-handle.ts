@@ -1,6 +1,7 @@
 import type { AdaSoulsClient } from "./client.js";
 import { AdaSoulsProviderError } from "./errors.js";
-import type { EconomicAction, PaymentInstruction } from "./types.js";
+import { reportBody } from "./reports.js";
+import type { AgentReport, EconomicAction, PaymentInstruction, ReportedMetrics } from "./types.js";
 
 const TERMINAL_STATUSES = new Set(["confirmed", "failed", "rejected", "reversed"]);
 
@@ -41,6 +42,13 @@ export class EconomicActionHandle {
   async reportPayment(txHash: string): Promise<this> {
     this.action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(this.action.id)}/payment`, { txHash });
     return this;
+  }
+
+  /** Declares figures only the agent knows about this action (see Agent.report). */
+  async report(metrics: ReportedMetrics): Promise<AgentReport[]> {
+    const body = reportBody({ action: this.action.id }, metrics);
+    const res = await this.client.post<{ reports: AgentReport[] }>(`/agents/${encodeURIComponent(this.action.agentId)}/reports`, body);
+    return res.reports;
   }
 
   /**
