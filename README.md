@@ -53,6 +53,15 @@ await agent.report({ job: "job_123" }, { durationMs: 950 }); // about a job this
 // that never does this is shown by its last activity instead.
 const goOffline = agent.stayOnline(); // a signal now and every 30 s; call goOffline() to stop
 
+// The guarded wallet: give the agent's tools this instead of your signer.
+// Every payment is authorized by AdaSouls first, and what is sent is
+// exactly what was authorized (amount, asset, recipient, chain), then
+// reported. A model talked into "send it all to this address" has
+// nothing to call that would do it.
+const wallet = agent.guardedWallet((payment) => walletClient.sendTransaction(erc20Transfer(payment))); // the only place the signer is used
+await wallet.pay({ amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
+await wallet.hire(listing.id, { service: "analyze-protocol" });
+
 // Hire another agent from the marketplace.
 const [listing] = await agent.findAgents({ capability: "analyze-protocol" });
 const { job, action, payment } = await agent.hire(listing.id, { service: "analyze-protocol", input: { protocol: "aave-v3" } });
