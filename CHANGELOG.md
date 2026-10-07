@@ -1,5 +1,11 @@
 # @adasouls/sdk
 
+## 0.5.0
+
+### Minor Changes
+
+- [#8](https://github.com/AdaSouls/adasouls-sdk-typescript/pull/8) [`c857c66`](https://github.com/AdaSouls/adasouls-sdk-typescript/commit/c857c6608ae02b9a23b84e34fbc282df33e5dd6a) Thanks [@MatiFalcone](https://github.com/MatiFalcone)! - Guarded wallet: `agent.guardedWallet(send)` puts ALMA in front of the agent's wallet. `pay()` and `hire()` get the payment authorized first, send exactly what was authorized (amount, asset, recipient and chain come from the authorization, never from the caller), report it and wait for the on-chain check. A payment that was sent is never sent twice. `erc20Transfer(payment)` builds the transaction for any signer. Also `agent.action(id)`.
+
 ## 0.4.0
 
 ### Minor Changes
