@@ -1,5 +1,6 @@
 import type { AdaSoulsClient } from "./client.js";
 import { EconomicActionHandle } from "./economic-action-handle.js";
+import { GuardedWallet, type GuardedWalletOptions, type SendPayment } from "./guarded-wallet.js";
 import { AdaSoulsApprovalPending, AdaSoulsNoDelegationError, AdaSoulsPolicyError } from "./errors.js";
 import { reportBody } from "./reports.js";
 import type {
@@ -169,6 +170,21 @@ export class Agent {
   async reports(subject?: ReportSubject): Promise<AgentReports> {
     const query = !subject ? undefined : "action" in subject ? { about: "action", ref: subject.action } : { about: "job", ref: subject.job };
     return this.client.get<AgentReports>(`/agents/${encodeURIComponent(this.id)}/reports`, query);
+  }
+
+  /** One of this agent's actions, by id: its current state, and what is left to do about it. */
+  async action(economicActionId: string): Promise<EconomicActionHandle> {
+    return new EconomicActionHandle(this.client, await this.client.get<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}`));
+  }
+
+  /**
+   * This agent's wallet with ALMA in front of it: every payment is
+   * authorized first, and what is sent is exactly what was authorized.
+   * `send` is the one place your signer is used; give the agent's tools
+   * the returned wallet, never the signer. See GuardedWallet.
+   */
+  guardedWallet(send: SendPayment, options?: GuardedWalletOptions): GuardedWallet {
+    return new GuardedWallet(this, send, options);
   }
 
   // ---------- Presence ----------
