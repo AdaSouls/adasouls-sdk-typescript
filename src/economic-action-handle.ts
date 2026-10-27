@@ -1,7 +1,15 @@
 import type { AdaSoulsClient } from "./client.js";
-import { AdaSoulsProviderError } from "./errors.js";
+import { AdaSoulsProviderError, AdaSoulsValidationError } from "./errors.js";
 import { reportBody } from "./reports.js";
-import type { AgentReport, EconomicAction, PaymentInstruction, ReportedMetrics } from "./types.js";
+import type { AgentReport, EconomicAction, PaymentInstruction, PaymentReport, ReportedMetrics } from "./types.js";
+
+/** The request body for POST /economic-actions/:id/payment. An on-chain payment is sent as `{ txHash }`. */
+export function paymentBody(report: string | PaymentReport): { txHash: string } {
+  const r: PaymentReport = typeof report === "string" ? { rail: "onchain", txHash: report } : report;
+  if (r.rail !== "onchain") throw new AdaSoulsValidationError(`unknown payment rail "${String((r as { rail?: unknown }).rail)}"`);
+  if (typeof r.txHash !== "string" || r.txHash.trim() === "") throw new AdaSoulsValidationError("txHash is required");
+  return { txHash: r.txHash };
+}
 
 const TERMINAL_STATUSES = new Set(["confirmed", "failed", "rejected", "reversed"]);
 
@@ -34,13 +42,13 @@ export class EconomicActionHandle {
   }
 
   /**
-   * Reports the transaction that made this payment. AdaSouls checks it
-   * on-chain (from the agent's declared wallet, to the planned address,
-   * this amount) before confirming the action; wait() afterwards to see
-   * the outcome.
+   * Reports the transaction that made this payment (a hash, or
+   * `{ rail: "onchain", txHash }`). AdaSouls checks it (from the agent's
+   * declared wallet, to the planned address, this amount) before
+   * confirming the action; wait() afterwards to see the outcome.
    */
-  async reportPayment(txHash: string): Promise<this> {
-    this.action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(this.action.id)}/payment`, { txHash });
+  async reportPayment(report: string | PaymentReport): Promise<this> {
+    this.action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(this.action.id)}/payment`, paymentBody(report));
     return this;
   }
 
@@ -66,7 +74,7 @@ export class EconomicActionHandle {
     while (!TERMINAL_STATUSES.has(this.action.status)) {
       if (Date.now() >= deadline) return this.action;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
-      this.action = await this.client.get<EconomicAction>(`/economic-actions/${this.action.id}`);
+      this.action = await this.client.get<EconomicAction>(`/economic-actions/${encodeURIComponent(this.action.id)}`);
     }
 
     if (this.action.status === "failed") {

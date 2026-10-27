@@ -99,8 +99,9 @@ export interface CounterpartyRef {
 
 export interface ExecuteInput {
   capability: string;
-  amount?: string;
-  asset?: string;
+  /** A decimal amount, e.g. "10.50". Required: every economic action moves money, and the API refuses one without it. */
+  amount: string;
+  asset: string;
   to?: string;
   detail?: Record<string, unknown>;
   counterparty?: CounterpartyRef;
@@ -113,8 +114,9 @@ export interface ExecuteInput {
 
 export interface CheckPolicyInput {
   capability: string;
-  amount?: string;
-  asset?: string;
+  /** Required, as for execute(): a spending limit can't be checked without it. */
+  amount: string;
+  asset: string;
   to?: string;
   detail?: Record<string, unknown>;
   counterparty?: CounterpartyRef;
@@ -167,6 +169,14 @@ export interface PaymentInstruction {
   amount: string;
   asset: string;
 }
+
+/**
+ * How a payment the agent made itself was made, for reportPayment(). A
+ * bare string is an on-chain transaction hash, same as
+ * `{ rail: "onchain", txHash }`. Other rails are added here as the API
+ * accepts them.
+ */
+export type PaymentReport = { rail: "onchain"; txHash: string };
 
 /** A marketplace listing as a buyer sees it. The seller's record is computed by AdaSouls from verified receipts. */
 export interface Listing {
@@ -277,4 +287,50 @@ export interface StayOnlineOptions {
   intervalMs?: number;
   /** Called when a signal fails. The next one is still sent. */
   onError?: (err: unknown) => void;
+}
+
+export type AttestationStatus = "pending" | "confirmed" | "declined";
+
+/**
+ * The record of one settled payment between two agents. The payee
+ * answers `payment` ("I received it"), the payer `delivery` ("delivered
+ * as agreed"); each answer is signed by AdaSouls and logged. Counting
+ * uses the signed envelopes, never the status columns.
+ */
+export interface Receipt {
+  id: string;
+  economicActionId: string;
+  payerId: string;
+  payeeId: string;
+  env: string;
+  /** False when the two organizations share a member: related parties never count as outside vouching. */
+  independent: boolean;
+  statement: Record<string, unknown>;
+  digest: string;
+  /** Only your own side's salt is returned; the other is null. */
+  payerSalt: string | null;
+  payeeSalt: string | null;
+  commitment: string | null;
+  paymentStatus: AttestationStatus;
+  paymentDecidedAt: string | null;
+  paymentDecidedBy: "member" | "agent" | null;
+  paymentReason: string | null;
+  deliveryStatus: AttestationStatus;
+  deliveryDecidedAt: string | null;
+  deliveryDecidedBy: "member" | "agent" | null;
+  deliveryReason: string | null;
+  mintSignature: unknown;
+  paymentSignature: unknown;
+  deliverySignature: unknown;
+  createdAt: string;
+  /** Where each signed envelope sits in the transparency log, with proofs. Returned by receipt(), not by attest(). */
+  log?: unknown;
+}
+
+export interface AttestInput {
+  /** `delivery` is the payer's (the buyer's) to answer, `payment` the payee's. */
+  kind: "payment" | "delivery";
+  decision: "confirm" | "decline";
+  /** At most 500 characters. */
+  reason?: string;
 }

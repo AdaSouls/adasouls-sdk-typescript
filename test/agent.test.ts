@@ -278,3 +278,41 @@ describe("marketplace", () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("payment reports", () => {
+  it("a tx hash, bare or with its rail, is sent as { txHash }", async () => {
+    const post = vi.fn().mockResolvedValue(baseAction({ status: "executing" }));
+    await new Agent(fakeClient({ post }), "agent_1").reportPayment("eco_1", "0xabc");
+    await new EconomicActionHandle(fakeClient({ post }), baseAction()).reportPayment({ rail: "onchain", txHash: "0xdef" });
+    expect(post.mock.calls.map((c) => c[1])).toEqual([{ txHash: "0xabc" }, { txHash: "0xdef" }]);
+  });
+
+  it("refuses a rail the API doesn't take, or no hash, before calling the API", async () => {
+    const post = vi.fn();
+    const agent = new Agent(fakeClient({ post }), "agent_1");
+    await expect(agent.reportPayment("eco_1", { rail: "stripe", reference: "pi_3N" } as never)).rejects.toThrow(/unknown payment rail/);
+    await expect(agent.reportPayment("eco_1", "")).rejects.toThrow(/txHash/);
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("receipts", () => {
+  it("receipt() reads an action's receipt; attest() answers it with the API's body", async () => {
+    const get = vi.fn().mockResolvedValue({ id: "rcp_1" });
+    const post = vi.fn().mockResolvedValue({ id: "rcp_1", deliveryStatus: "confirmed" });
+    const agent = new Agent(fakeClient({ get, post }), "agent_1");
+    expect(await agent.receipt("eco_1")).toEqual({ id: "rcp_1" });
+    expect(get).toHaveBeenCalledWith("/economic-actions/eco_1/receipt");
+
+    expect(await agent.attest("rcp_1", { kind: "delivery", decision: "confirm" })).toMatchObject({ deliveryStatus: "confirmed" });
+    expect(post).toHaveBeenCalledWith("/receipts/rcp_1/attestations", { kind: "delivery", decision: "confirm", reason: undefined });
+    await agent.attest("rcp_1", { kind: "delivery", decision: "decline", reason: "empty answer" });
+    expect(post).toHaveBeenLastCalledWith("/receipts/rcp_1/attestations", { kind: "delivery", decision: "decline", reason: "empty answer" });
+  });
+
+  it("attest() refuses a reason the API would refuse", async () => {
+    const post = vi.fn();
+    await expect(new Agent(fakeClient({ post }), "agent_1").attest("rcp_1", { kind: "delivery", decision: "decline", reason: "x".repeat(501) })).rejects.toThrow(/500/);
+    expect(post).not.toHaveBeenCalled();
+  });
+});

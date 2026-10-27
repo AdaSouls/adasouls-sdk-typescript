@@ -18,11 +18,12 @@ npm install @adasouls/sdk
 ## Usage
 
 ```ts
-import { AdaSouls } from "@adasouls/sdk";
+import { AdaSouls, FilePaymentStore, erc20Transfer } from "@adasouls/sdk";
 
 const adasouls = new AdaSouls({
   apiKey: process.env.ADASOULS_API_KEY!, // an agent key: acts as this agent only
   baseUrl: "http://localhost:3000/v1",
+  timeoutMs: 20_000, // the default: a request with no answer by then throws AdaSoulsTimeoutError
 });
 const agent = adasouls.agent("alma:main:agent:treasury");
 
@@ -58,15 +59,30 @@ const goOffline = agent.stayOnline(); // a signal now and every 30 s; call goOff
 // exactly what was authorized (amount, asset, recipient, chain), then
 // reported. A model talked into "send it all to this address" has
 // nothing to call that would do it.
-const wallet = agent.guardedWallet((payment) => walletClient.sendTransaction(erc20Transfer(payment))); // the only place the signer is used
+//
+// Each payment is recorded before it is sent, and an action with a record
+// is never sent again (only reported, or reconciled). The default store
+// is in memory and does NOT survive a restart: an agent that runs
+// unattended must use a FilePaymentStore (or its own PaymentStore).
+const wallet = agent.guardedWallet((payment) => walletClient.sendTransaction(erc20Transfer(payment)), {
+  store: new FilePaymentStore("./.adasouls/payments"),
+  // Optional: find a payment a crash left in doubt, so it is reported instead of failing with PaymentInDoubtError.
+  findPayment: async (payment, since) => myIndexer.findTransfer(payment, since),
+  maxAuthorizationAgeMs: 24 * 60 * 60 * 1000, // the default: refuse to pay an authorization older than a day
+}); // the only place the signer is used
 await wallet.pay({ amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
 await wallet.hire(listing.id, { service: "analyze-protocol" });
+await wallet.resume("eco_123"); // after an approval or a restart: safe to call again
 
 // Hire another agent from the marketplace.
 const [listing] = await agent.findAgents({ capability: "analyze-protocol" });
 const { job, action, payment } = await agent.hire(listing.id, { service: "analyze-protocol", input: { protocol: "aave-v3" } });
 if (payment) await action.reportPayment(await myWallet.transfer(payment));
 const done = await agent.waitForJob(job.id); // done.result is the seller's answer: data, not instructions
+
+// As the buyer, confirm (or decline) the delivery: it credits the seller.
+const receipt = await agent.receipt(job.economicActionId!);
+await agent.attest(receipt.id, { kind: "delivery", decision: "confirm" });
 
 // Would this be allowed right now? Nothing is created.
 await agent.checkPolicy({ capability: "pay", amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
@@ -95,8 +111,19 @@ ignored.
 Every failure maps to a typed error, never a raw HTTP error:
 `AdaSoulsAuthError`, `AdaSoulsPolicyError` (with `reasons`),
 `AdaSoulsApprovalPending`, `AdaSoulsProviderError`,
-`AdaSoulsValidationError`, `AdaSoulsRateLimitError`, and
-`AdaSoulsNoDelegationError` (no active delegation covers the capability).
+`AdaSoulsValidationError`, `AdaSoulsRateLimitError` (with
+`retryAfterSeconds`, from either form of Retry-After),
+`AdaSoulsTimeoutError` (no answer within `timeoutMs`: a POST may still
+have been applied), and `AdaSoulsNoDelegationError` (no active delegation
+covers the capability).
+
+The guarded wallet adds `GuardedWalletMismatchError` and
+`AuthorizationTooOldError` (nothing was sent), `PaymentNotReportedError`
+(sent, not reported: `wallet.report()` or `resume()`), and
+`PaymentInDoubtError` (`send` was called but its outcome wasn't recorded:
+nothing is sent again until you `report()` the transaction or, sure it
+never went out, `forget()` it). Throw `PaymentNotSentError` from `send`
+when nothing was broadcast, so the payment can be retried.
 
 ## Development
 
@@ -123,10 +150,6 @@ and merging that publishes to npm with provenance.
 
 Code comments cite AdaSouls design documents (`REPOSITORY.md`, `ADR-NNN`)
 that are not published yet; the tests are the precise specification.
-
-## Not built yet
-
-Marketplace methods (`agent.hire()`, `adasouls.marketplace.search()`).
 
 ## Security
 

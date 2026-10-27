@@ -1,8 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "../src/agent.js";
 import type { AdaSoulsClient } from "../src/client.js";
 import { AdaSoulsApprovalPending, AdaSoulsPolicyError } from "../src/errors.js";
-import { GuardedWalletMismatchError, PaymentNotReportedError, erc20Transfer } from "../src/guarded-wallet.js";
+import {
+  AuthorizationTooOldError,
+  GuardedWalletMismatchError,
+  PaymentInDoubtError,
+  PaymentNotReportedError,
+  PaymentNotSentError,
+  erc20Transfer,
+  type GuardedWalletOptions,
+  type SendPayment,
+} from "../src/guarded-wallet.js";
+import { FilePaymentStore, type PaymentStore } from "../src/payment-store.js";
 import type { EconomicAction } from "../src/types.js";
 
 const TO = "0x1111111111111111111111111111111111111111";
@@ -120,6 +133,192 @@ describe("GuardedWallet", () => {
     const overpriced = wallet({ "/hire": { job, action: action({ executionPlan: plan({ amount: "100" }) } as never) } });
     await expect(overpriced.wallet.hire("lst_1", { service: "assess-risk" })).rejects.toBeInstanceOf(GuardedWalletMismatchError);
     expect(overpriced.send).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The API's side of a self-paid action, enough to restart a wallet
+ * against: authorized until a payment is reported, then executing with
+ * the reported transaction, then confirmed. Reporting twice is a 409,
+ * as on the real API.
+ */
+function fakeApi(over: Partial<EconomicAction> = {}) {
+  let current = action(over);
+  let reportsDown = 0;
+  const post = vi.fn(async (path: string, body: { txHash: string }) => {
+    if (!path.endsWith("/payment")) throw new Error(`unexpected POST ${path}`);
+    if (reportsDown > 0) {
+      reportsDown--;
+      throw new Error("network down");
+    }
+    if (current.status !== "authorized") throw new Error(`409: economic action is ${current.status}, not waiting for a payment`);
+    current = { ...current, status: "executing", execution: { mode: "self", txHash: body.txHash } };
+    return current;
+  });
+  const get = vi.fn(async () => {
+    if (current.status === "executing") current = { ...current, status: "confirmed" };
+    return current;
+  });
+  const agent = new Agent({ get, post } as unknown as AdaSoulsClient, "agent_1");
+  return {
+    post,
+    /** A wallet process: a new one shares nothing with the last but the store. */
+    process: (send: SendPayment, options: GuardedWalletOptions = {}) => agent.guardedWallet(send, { waitOptions: { intervalMs: 1 }, ...options }),
+    failNextReports: (n: number) => (reportsDown = n),
+    get status() {
+      return current.status;
+    },
+  };
+}
+
+describe("GuardedWallet: one authorization, one payment (B6)", () => {
+  let dir: string;
+  let store: PaymentStore;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "adasouls-payments-"));
+    store = new FilePaymentStore(dir);
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  it("two concurrent resume() calls send once, and share the outcome", async () => {
+    const api = fakeApi();
+    const send = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return "0xabc";
+    });
+    const w = api.process(send, { store });
+    const [a, b] = await Promise.all([w.resume("eco_1"), w.resume("eco_1")]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ txHash: "0xabc", action: { status: "confirmed" } });
+  });
+
+  it("two wallet processes sharing a file store: only one sends", async () => {
+    const api = fakeApi();
+    const send = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return "0xabc";
+    });
+    const results = await Promise.allSettled([api.process(send, { store: new FilePaymentStore(dir) }).resume("eco_1"), api.process(send, { store: new FilePaymentStore(dir) }).resume("eco_1")]);
+    expect(send).toHaveBeenCalledTimes(1);
+    // The loser saw a payment it didn't start, still unrecorded: it doesn't send, it says so.
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect((results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason).toBeInstanceOf(PaymentInDoubtError);
+  });
+
+  it("a crash between sending and reporting: after the restart the payment is reported, not sent again", async () => {
+    const api = fakeApi();
+    const send = vi.fn().mockResolvedValue("0xabc");
+    api.failNextReports(1); // the process dies here: the report never arrives
+    await expect(api.process(send, { store }).resume("eco_1")).rejects.toBeInstanceOf(PaymentNotReportedError);
+    expect(api.status).toBe("authorized");
+
+    const restarted = api.process(send, { store: new FilePaymentStore(dir) });
+    expect(await restarted.resume("eco_1")).toMatchObject({ txHash: "0xabc", action: { status: "confirmed" } });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("a crash while send was running: after the restart nothing is sent, and the payment is in doubt", async () => {
+    const api = fakeApi();
+    // The process dies inside send: it never returns.
+    const hung = vi.fn(() => new Promise<string>(() => {}));
+    void api.process(hung, { store }).resume("eco_1");
+    await vi.waitFor(() => expect(hung).toHaveBeenCalled());
+
+    const send = vi.fn().mockResolvedValue("0xdef");
+    const err = await api.process(send, { store: new FilePaymentStore(dir) }).resume("eco_1").catch((e) => e);
+    expect(err).toBeInstanceOf(PaymentInDoubtError);
+    expect(err).toMatchObject({ economicActionId: "eco_1", payment: { to: TO, amount: "10" } });
+    expect(send).not.toHaveBeenCalled();
+
+    // With a way to look the payment up, it is found and reported instead.
+    const findPayment = vi.fn().mockResolvedValue("0xabc");
+    expect(await api.process(send, { store: new FilePaymentStore(dir), findPayment }).resume("eco_1")).toMatchObject({ txHash: "0xabc" });
+    expect(findPayment.mock.calls[0][0]).toMatchObject({ to: TO, amount: "10" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a payment AdaSouls already has is not reported again after a restart", async () => {
+    const api = fakeApi();
+    const hung = vi.fn(() => new Promise<string>(() => {}));
+    void api.process(hung, { store }).resume("eco_1");
+    await vi.waitFor(() => expect(hung).toHaveBeenCalled());
+    // The report reached the API but the record of it didn't reach disk.
+    await api.post("/economic-actions/eco_1/payment", { txHash: "0xabc" });
+
+    const send = vi.fn();
+    expect(await api.process(send, { store: new FilePaymentStore(dir) }).resume("eco_1")).toMatchObject({ txHash: "0xabc", action: { status: "confirmed" } });
+    expect(send).not.toHaveBeenCalled();
+    expect(await store.get("eco_1")).toMatchObject({ state: "sent", txHash: "0xabc" });
+  });
+
+  it("the state report's probe (two concurrent resumes, then a restart before reporting) sends once, not three times", async () => {
+    const api = fakeApi();
+    const send = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return "0xabc";
+    });
+    api.failNextReports(1);
+    const first = api.process(send, { store });
+    const outcomes = await Promise.allSettled([first.resume("eco_1"), first.resume("eco_1")]);
+    // One attempt, shared: one send, one lost report, the same error for both callers.
+    expect(outcomes.map((o) => (o as PromiseRejectedResult).reason)).toEqual([expect.any(PaymentNotReportedError), expect.any(PaymentNotReportedError)]);
+    expect(api.post).toHaveBeenCalledTimes(1);
+
+    const restarted = api.process(send, { store: new FilePaymentStore(dir) });
+    expect(await restarted.resume("eco_1")).toMatchObject({ txHash: "0xabc", action: { status: "confirmed" } });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("a send that fails without broadcasting can be retried; any other failure can't", async () => {
+    const api = fakeApi();
+    const send = vi.fn().mockRejectedValueOnce(new PaymentNotSentError("insufficient funds")).mockRejectedValueOnce(new Error("rpc timeout")).mockResolvedValue("0xabc");
+    const w = api.process(send, { store });
+    await expect(w.resume("eco_1")).rejects.toBeInstanceOf(PaymentNotSentError);
+    await expect(w.resume("eco_1")).rejects.toBeInstanceOf(PaymentInDoubtError);
+    await expect(w.resume("eco_1")).rejects.toBeInstanceOf(PaymentInDoubtError);
+    expect(send).toHaveBeenCalledTimes(2);
+
+    // Checked by hand: the rpc timeout never broadcast.
+    await w.forget("eco_1");
+    expect(await w.resume("eco_1")).toMatchObject({ txHash: "0xabc" });
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses an authorization older than maxAuthorizationAgeMs, and sends nothing", async () => {
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const send = vi.fn();
+    const err = await fakeApi({ createdAt: old }).process(send, { store }).resume("eco_1").catch((e) => e);
+    expect(err).toBeInstanceOf(AuthorizationTooOldError);
+    expect(send).not.toHaveBeenCalled();
+    expect(await store.get("eco_1")).toBeUndefined();
+
+    const lenient = fakeApi({ createdAt: old }).process(vi.fn().mockResolvedValue("0xabc"), { maxAuthorizationAgeMs: Infinity });
+    expect(await lenient.resume("eco_1")).toMatchObject({ txHash: "0xabc" });
+  });
+});
+
+describe("FilePaymentStore", () => {
+  let dir: string;
+  beforeEach(async () => (dir = await mkdtemp(join(tmpdir(), "adasouls-payments-"))));
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  const record = { economicActionId: "eco/1", state: "sending" as const, payment: null, txHash: null, sendingAt: new Date().toISOString() };
+
+  it("claims an action once, across instances, and leaves no temporary files", async () => {
+    const wins = await Promise.all(Array.from({ length: 8 }, () => new FilePaymentStore(dir).claim(record)));
+    expect(wins.filter(Boolean)).toHaveLength(1);
+    expect(await readdir(dir)).toEqual(["eco%2F1.json"]);
+  });
+
+  it("reads back what it wrote, replaces it, and deletes it", async () => {
+    const store = new FilePaymentStore(dir);
+    expect(await store.get("eco/1")).toBeUndefined();
+    await store.claim(record);
+    await store.put({ ...record, state: "sent", txHash: "0xabc" });
+    expect(await new FilePaymentStore(dir).get("eco/1")).toMatchObject({ state: "sent", txHash: "0xabc" });
+    await store.delete("eco/1");
+    expect(await store.get("eco/1")).toBeUndefined();
   });
 });
 
