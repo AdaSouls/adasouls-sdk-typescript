@@ -152,11 +152,7 @@ export class Agent {
     return input.wait && !handle.payment ? new EconomicActionHandle(this.client, await handle.wait()) : handle;
   }
 
-  /**
-   * Reports a payment this agent made itself (see
-   * EconomicActionHandle.payment): a transaction hash, or
-   * `{ rail: "stripe", reference: "pi_..." }` for a card payment.
-   */
+  /** Reports the transaction for a payment this agent made from its own wallet (see EconomicActionHandle.payment). */
   async reportPayment(economicActionId: string, report: string | PaymentReport): Promise<EconomicActionHandle> {
     const action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}/payment`, paymentBody(report));
     return new EconomicActionHandle(this.client, action);

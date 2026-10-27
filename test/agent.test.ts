@@ -280,21 +280,17 @@ describe("marketplace", () => {
 });
 
 describe("payment reports", () => {
-  it("a tx hash is sent as { txHash }, a Stripe payment by its rail and PaymentIntent", async () => {
+  it("a tx hash, bare or with its rail, is sent as { txHash }", async () => {
     const post = vi.fn().mockResolvedValue(baseAction({ status: "executing" }));
-    const agent = new Agent(fakeClient({ post }), "agent_1");
-    await agent.reportPayment("eco_1", "0xabc");
-    await agent.reportPayment("eco_1", { rail: "onchain", txHash: "0xdef" });
-    await agent.reportPayment("eco_1", { rail: "stripe", reference: "pi_3Nabc123" });
-    await new EconomicActionHandle(fakeClient({ post }), baseAction()).reportPayment({ rail: "stripe", reference: "pi_3Nxyz" });
-    expect(post.mock.calls.map((c) => c[1])).toEqual([{ txHash: "0xabc" }, { txHash: "0xdef" }, { rail: "stripe", reference: "pi_3Nabc123" }, { rail: "stripe", reference: "pi_3Nxyz" }]);
+    await new Agent(fakeClient({ post }), "agent_1").reportPayment("eco_1", "0xabc");
+    await new EconomicActionHandle(fakeClient({ post }), baseAction()).reportPayment({ rail: "onchain", txHash: "0xdef" });
+    expect(post.mock.calls.map((c) => c[1])).toEqual([{ txHash: "0xabc" }, { txHash: "0xdef" }]);
   });
 
-  it("refuses a Stripe reference that isn't a PaymentIntent, before calling the API", async () => {
+  it("refuses a rail the API doesn't take, or no hash, before calling the API", async () => {
     const post = vi.fn();
     const agent = new Agent(fakeClient({ post }), "agent_1");
-    await expect(agent.reportPayment("eco_1", { rail: "stripe", reference: "ch_3Nabc" })).rejects.toThrow(/PaymentIntent/);
-    await expect(agent.reportPayment("eco_1", { rail: "wire" } as never)).rejects.toThrow(/unknown payment rail/);
+    await expect(agent.reportPayment("eco_1", { rail: "stripe", reference: "pi_3N" } as never)).rejects.toThrow(/unknown payment rail/);
     await expect(agent.reportPayment("eco_1", "")).rejects.toThrow(/txHash/);
     expect(post).not.toHaveBeenCalled();
   });

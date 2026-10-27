@@ -3,24 +3,12 @@ import { AdaSoulsProviderError, AdaSoulsValidationError } from "./errors.js";
 import { reportBody } from "./reports.js";
 import type { AgentReport, EconomicAction, PaymentInstruction, PaymentReport, ReportedMetrics } from "./types.js";
 
-/**
- * The request body for POST /economic-actions/:id/payment. An on-chain
- * payment is sent as `{ txHash }`, the shape every API version takes; a
- * Stripe payment names its rail and its PaymentIntent.
- */
-export function paymentBody(report: string | PaymentReport): { txHash: string } | { rail: "stripe"; reference: string } {
+/** The request body for POST /economic-actions/:id/payment. An on-chain payment is sent as `{ txHash }`. */
+export function paymentBody(report: string | PaymentReport): { txHash: string } {
   const r: PaymentReport = typeof report === "string" ? { rail: "onchain", txHash: report } : report;
-  if (r.rail === "onchain") {
-    if (typeof r.txHash !== "string" || r.txHash.trim() === "") throw new AdaSoulsValidationError("txHash is required");
-    return { txHash: r.txHash };
-  }
-  if (r.rail === "stripe") {
-    if (typeof r.reference !== "string" || !/^pi_[A-Za-z0-9_]+$/.test(r.reference)) {
-      throw new AdaSoulsValidationError(`reference must be a Stripe PaymentIntent id (pi_...), got "${String(r.reference)}"`);
-    }
-    return { rail: "stripe", reference: r.reference };
-  }
-  throw new AdaSoulsValidationError(`unknown payment rail "${String((r as { rail?: unknown }).rail)}"`);
+  if (r.rail !== "onchain") throw new AdaSoulsValidationError(`unknown payment rail "${String((r as { rail?: unknown }).rail)}"`);
+  if (typeof r.txHash !== "string" || r.txHash.trim() === "") throw new AdaSoulsValidationError("txHash is required");
+  return { txHash: r.txHash };
 }
 
 const TERMINAL_STATUSES = new Set(["confirmed", "failed", "rejected", "reversed"]);
@@ -54,9 +42,8 @@ export class EconomicActionHandle {
   }
 
   /**
-   * Reports how this payment was made: a transaction hash (or
-   * `{ rail: "onchain", txHash }`), or `{ rail: "stripe", reference }`
-   * with the PaymentIntent's id. AdaSouls checks it (from the agent's
+   * Reports the transaction that made this payment (a hash, or
+   * `{ rail: "onchain", txHash }`). AdaSouls checks it (from the agent's
    * declared wallet, to the planned address, this amount) before
    * confirming the action; wait() afterwards to see the outcome.
    */

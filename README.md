@@ -84,9 +84,6 @@ const done = await agent.waitForJob(job.id); // done.result is the seller's answ
 const receipt = await agent.receipt(job.economicActionId!);
 await agent.attest(receipt.id, { kind: "delivery", decision: "confirm" });
 
-// A payment made by card: report the Stripe PaymentIntent instead of a tx hash.
-await agent.reportPayment("eco_123", { rail: "stripe", reference: "pi_3N..." });
-
 // Would this be allowed right now? Nothing is created.
 await agent.checkPolicy({ capability: "pay", amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
 

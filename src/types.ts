@@ -173,10 +173,10 @@ export interface PaymentInstruction {
 /**
  * How a payment the agent made itself was made, for reportPayment(). A
  * bare string is an on-chain transaction hash, same as
- * `{ rail: "onchain", txHash }`. For a card payment, the Stripe
- * PaymentIntent's id (`pi_...`).
+ * `{ rail: "onchain", txHash }`. Other rails are added here as the API
+ * accepts them.
  */
-export type PaymentReport = { rail: "onchain"; txHash: string } | { rail: "stripe"; reference: string };
+export type PaymentReport = { rail: "onchain"; txHash: string };
 
 /** A marketplace listing as a buyer sees it. The seller's record is computed by AdaSouls from verified receipts. */
 export interface Listing {
