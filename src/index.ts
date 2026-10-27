@@ -4,8 +4,18 @@ import { Agent } from "./agent.js";
 export { AdaSoulsClient } from "./client.js";
 export { Agent } from "./agent.js";
 export { EconomicActionHandle } from "./economic-action-handle.js";
-export { GuardedWallet, GuardedWalletMismatchError, PaymentNotReportedError, erc20Transfer } from "./guarded-wallet.js";
-export type { Erc20TransferCall, GuardedWalletOptions, Paid, PayInput, SendPayment } from "./guarded-wallet.js";
+export {
+  AuthorizationTooOldError,
+  GuardedWallet,
+  GuardedWalletMismatchError,
+  PaymentInDoubtError,
+  PaymentNotReportedError,
+  PaymentNotSentError,
+  erc20Transfer,
+} from "./guarded-wallet.js";
+export type { Erc20TransferCall, FindPayment, GuardedWalletOptions, Paid, PayInput, SendPayment } from "./guarded-wallet.js";
+export { FilePaymentStore, MemoryPaymentStore } from "./payment-store.js";
+export type { PaymentRecord, PaymentStore } from "./payment-store.js";
 export * from "./errors.js";
 export * from "./types.js";
 

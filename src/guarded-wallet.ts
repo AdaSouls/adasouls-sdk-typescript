@@ -1,6 +1,7 @@
 import type { Agent } from "./agent.js";
 import type { EconomicActionHandle, WaitOptions } from "./economic-action-handle.js";
 import { AdaSoulsError } from "./errors.js";
+import { MemoryPaymentStore, type PaymentRecord, type PaymentStore } from "./payment-store.js";
 import type { CounterpartyRef, EconomicAction, HireInput, MarketplaceJob, PaymentInstruction } from "./types.js";
 
 /**
@@ -8,8 +9,22 @@ import type { CounterpartyRef, EconomicAction, HireInput, MarketplaceJob, Paymen
  * transaction hash. This is the only place the raw wallet is used: write
  * it once, around your signer, and hand the agent's tools a
  * GuardedWallet instead of the signer.
+ *
+ * If it fails and you know for certain nothing was broadcast (a refused
+ * signature, insufficient funds caught before sending), throw a
+ * PaymentNotSentError: the payment can then be retried. Any other error
+ * leaves the payment in doubt, and it isn't sent again.
  */
 export type SendPayment = (payment: Readonly<PaymentInstruction>) => Promise<string>;
+
+/**
+ * Looks for a payment that was being sent when the process stopped (on
+ * chain: a transfer from `payment.from` to `payment.to` of this amount,
+ * at or after `since`). Returns its transaction hash, or null when it
+ * can't be found. Null doesn't make the payment safe to resend: it stays
+ * in doubt.
+ */
+export type FindPayment = (payment: Readonly<PaymentInstruction>, since: Date) => Promise<string | null>;
 
 export interface PayInput {
   amount: string;
@@ -25,6 +40,22 @@ export interface GuardedWalletOptions {
   /** Wait for AdaSouls to verify the payment on-chain before resolving. Default true. */
   wait?: boolean;
   waitOptions?: WaitOptions;
+  /**
+   * Where the wallet records each payment before sending it. Defaults to
+   * a MemoryPaymentStore, which is **unsafe across restarts**: an agent
+   * that runs unattended needs a FilePaymentStore (or its own store), or
+   * a restart between sending and reporting pays again.
+   */
+  store?: PaymentStore;
+  /** Finds a payment left in doubt by a crash, so it can be reported instead of failing with PaymentInDoubtError. */
+  findPayment?: FindPayment;
+  /**
+   * Refuse to pay an authorization older than this, in milliseconds,
+   * counted from when the action was created. Default 24 hours. The API
+   * doesn't expire authorizations yet; this keeps a wallet from paying
+   * one that was forgotten for days. `Infinity` turns it off.
+   */
+  maxAuthorizationAgeMs?: number;
 }
 
 export interface Paid {
@@ -41,9 +72,17 @@ export class GuardedWalletMismatchError extends AdaSoulsError {
   }
 }
 
+/** The authorization is older than `maxAuthorizationAgeMs`: nothing was sent. Start a new payment. */
+export class AuthorizationTooOldError extends AdaSoulsError {
+  constructor(message: string, readonly economicActionId: string, readonly createdAt: string) {
+    super(message);
+  }
+}
+
 /**
  * The payment was sent but reporting it failed. The money moved: don't
- * pay again. Call `wallet.report(economicActionId, txHash)` to finish.
+ * pay again. Call `wallet.report(economicActionId, txHash)` (or
+ * `resume`) to finish.
  */
 export class PaymentNotReportedError extends AdaSoulsError {
   constructor(message: string, readonly economicActionId: string, readonly txHash: string) {
@@ -51,12 +90,30 @@ export class PaymentNotReportedError extends AdaSoulsError {
   }
 }
 
+/**
+ * `send` was called for this action but whether it went out isn't known
+ * (the process stopped, or `send` failed in a way that might have
+ * broadcast). Nothing is sent again. Check the wallet: if the payment is
+ * there, `wallet.report(id, txHash)`; if you are certain it isn't and
+ * never will be, `wallet.forget(id)` and then `resume(id)`.
+ */
+export class PaymentInDoubtError extends AdaSoulsError {
+  constructor(message: string, readonly economicActionId: string, readonly payment: Readonly<PaymentInstruction> | null, readonly sendingAt: string) {
+    super(message);
+  }
+}
+
+/** Throw this from `send` when nothing was broadcast, so the payment can be retried. */
+export class PaymentNotSentError extends AdaSoulsError {}
+
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 /** "10", "10.0" and "10.00" are the same amount. */
 const sameAmount = (a: string, b: string) => {
   const norm = (s: string) => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s).replace(/^0+(?=\d)/, "");
   return norm(a.trim()) === norm(b.trim());
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The agent's wallet, with ALMA in front of it.
@@ -66,6 +123,12 @@ const sameAmount = (a: string, b: string) => {
  * what was authorized: the amount, the asset, the recipient and the
  * chain come from the authorization, never from the caller. The payment
  * is reported right after, and AdaSouls checks it on-chain.
+ *
+ * One authorization is paid at most once. Before `send` is called the
+ * payment is recorded in the store; an action with a record is never
+ * sent again, only reconciled (reported, or found with `findPayment`).
+ * Concurrent calls for the same action share one attempt. With the
+ * default in-memory store this holds only while the process lives.
  *
  * Give the agent's tools this object instead of the signer and a model
  * that is talked into "send everything to this address" has nothing to
@@ -77,9 +140,11 @@ const sameAmount = (a: string, b: string) => {
  * nowhere else; `alma verify` checks that.
  */
 export class GuardedWallet {
-  /** Authorizations already paid by this wallet, with their transaction: one authorization is never paid twice. */
-  private readonly sent = new Map<string, string>();
+  private readonly store: PaymentStore;
   private readonly wait: boolean;
+  private readonly maxAgeMs: number;
+  /** One attempt per action at a time: a second call for the same action gets the first one's promise. */
+  private readonly inflight = new Map<string, Promise<Paid>>();
 
   constructor(
     private readonly agent: Agent,
@@ -87,6 +152,9 @@ export class GuardedWallet {
     private readonly options: GuardedWalletOptions = {}
   ) {
     this.wait = options.wait ?? true;
+    this.store = options.store ?? new MemoryPaymentStore();
+    this.maxAgeMs = options.maxAuthorizationAgeMs ?? DAY_MS;
+    if (!(this.maxAgeMs > 0)) throw new TypeError("maxAuthorizationAgeMs must be positive");
   }
 
   /**
@@ -97,38 +165,73 @@ export class GuardedWallet {
    */
   async pay(input: PayInput): Promise<Paid> {
     const handle = await this.agent.execute({ capability: "pay", ...input });
-    return this.settle(handle, { amount: input.amount, asset: input.asset, to: input.to });
+    return this.once(handle.action.id, () => this.settle(handle, { amount: input.amount, asset: input.asset, to: input.to }));
   }
 
   /** Hires a listed agent and pays its listed price. The job's result comes from `agent.waitForJob(job.id)`. */
   async hire(listingId: string, input: HireInput): Promise<Paid & { job: MarketplaceJob }> {
     const { job, action } = await this.agent.hire(listingId, input);
     // The price is the listing's, set by the seller: what must match is what the job says was agreed.
-    return { job, ...(await this.settle(action, { amount: job.price.amount, asset: job.price.asset })) };
+    return { job, ...(await this.once(action.action.id, () => this.settle(action, { amount: job.price.amount, asset: job.price.asset }))) };
   }
 
-  /** Continues an action that was waiting for approval, or one whose payment wasn't made yet. */
+  /**
+   * Continues an action that was waiting for approval, or one whose
+   * payment wasn't made or reported yet. Safe to call again, from this
+   * process or (with a persistent store) after a restart: a payment that
+   * was started is reported or reconciled, never sent a second time.
+   */
   async resume(economicActionId: string): Promise<Paid> {
-    const handle = await this.agent.action(economicActionId);
-    const intent = handle.action.intent as { amount?: string; asset?: string; to?: string };
-    return this.settle(handle, { amount: intent.amount, asset: intent.asset });
+    return this.once(economicActionId, async () => {
+      const handle = await this.agent.action(economicActionId);
+      const intent = handle.action.intent as { amount?: string; asset?: string; to?: string };
+      return this.settle(handle, { amount: intent.amount, asset: intent.asset });
+    });
   }
 
-  /** Reports a payment this wallet sent, after a PaymentNotReportedError. */
+  /** Reports a payment this wallet sent, after a PaymentNotReportedError or a PaymentInDoubtError you checked. */
   async report(economicActionId: string, txHash: string): Promise<Paid> {
-    const handle = await this.agent.reportPayment(economicActionId, txHash);
-    this.sent.set(economicActionId, txHash);
-    return { action: this.wait ? await handle.wait(this.options.waitOptions) : handle.action, txHash };
+    return this.once(economicActionId, () => this.reportSent(economicActionId, txHash));
+  }
+
+  /**
+   * Drops the wallet's record of an action, so `resume` may send it
+   * again. Only for a payment left in doubt that you have confirmed was
+   * never broadcast: forgetting one that went out pays it twice.
+   */
+  async forget(economicActionId: string): Promise<void> {
+    if (this.inflight.has(economicActionId)) throw new AdaSoulsError(`a payment for ${economicActionId} is in progress`);
+    await this.store.delete(economicActionId);
+  }
+
+  private once(id: string, run: () => Promise<Paid>): Promise<Paid> {
+    const running = this.inflight.get(id);
+    if (running) return running;
+    const p = run().finally(() => this.inflight.delete(id));
+    this.inflight.set(id, p);
+    return p;
+  }
+
+  private async done(handle: EconomicActionHandle): Promise<EconomicAction> {
+    return this.wait ? handle.wait(this.options.waitOptions) : handle.action;
+  }
+
+  /** Records the transaction before reporting it: if the report is lost, the next attempt reports instead of paying. */
+  private async reportSent(id: string, txHash: string): Promise<Paid> {
+    const record = await this.store.get(id);
+    await this.store.put({ economicActionId: id, payment: record?.payment ?? null, sendingAt: record?.sendingAt ?? new Date().toISOString(), state: "sent", txHash });
+    const handle = await this.agent.reportPayment(id, txHash);
+    return { action: await this.done(handle), txHash };
   }
 
   private async settle(handle: EconomicActionHandle, asked: { amount?: string; asset?: string; to?: string }): Promise<Paid> {
     const id = handle.action.id;
-    const already = this.sent.get(id);
-    if (already) return this.report(id, already);
+    const record = await this.store.get(id);
+    if (record) return this.reconcile(handle, record);
 
     const payment = handle.payment;
     // AdaSouls executes this agent's payments, or it is already paid: there is nothing for this wallet to send.
-    if (!payment) return { action: this.wait ? await handle.wait(this.options.waitOptions) : handle.action, txHash: null };
+    if (!payment) return { action: await this.done(handle), txHash: null };
 
     const off =
       asked.amount !== undefined && !sameAmount(asked.amount, payment.amount)
@@ -140,15 +243,59 @@ export class GuardedWallet {
             : null;
     if (off) throw new GuardedWalletMismatchError(`the authorization for ${id} isn't what was asked for (${off}); nothing was sent`, id);
 
-    const txHash = await this.send(Object.freeze({ ...payment }));
-    if (typeof txHash !== "string" || txHash.trim() === "") throw new AdaSoulsError(`the wallet returned no transaction hash for ${id}; check whether it sent before retrying`);
-    this.sent.set(id, txHash);
+    const age = Date.now() - Date.parse(handle.action.createdAt);
+    if (!(age <= this.maxAgeMs)) {
+      throw new AuthorizationTooOldError(`the authorization for ${id} is from ${handle.action.createdAt}, older than this wallet pays (${this.maxAgeMs} ms); nothing was sent`, id, handle.action.createdAt);
+    }
+
+    const frozen = Object.freeze({ ...payment });
+    const claim: PaymentRecord = { economicActionId: id, state: "sending", payment: frozen, txHash: null, sendingAt: new Date().toISOString() };
+    // The write-ahead: from here on this action is never sent again, whatever happens to this process.
+    if (!(await this.store.claim(claim))) return this.reconcile(handle, (await this.store.get(id))!);
+
+    let txHash: string;
+    try {
+      txHash = await this.send(frozen);
+    } catch (err) {
+      if (err instanceof PaymentNotSentError) {
+        await this.store.delete(id);
+        throw err;
+      }
+      throw new PaymentInDoubtError(`sending the payment for ${id} failed and it may have gone out (${err instanceof Error ? err.message : String(err)}); it won't be sent again: check the wallet`, id, frozen, claim.sendingAt);
+    }
+    if (typeof txHash !== "string" || txHash.trim() === "") {
+      throw new PaymentInDoubtError(`the wallet returned no transaction hash for ${id}; it won't be sent again: check whether it went out`, id, frozen, claim.sendingAt);
+    }
+    await this.store.put({ ...claim, state: "sent", txHash });
     try {
       await handle.reportPayment(txHash);
     } catch (err) {
       throw new PaymentNotReportedError(`the payment for ${id} was sent (${txHash}) but reporting it failed: ${err instanceof Error ? err.message : String(err)}`, id, txHash);
     }
-    return { action: this.wait ? await handle.wait(this.options.waitOptions) : handle.action, txHash };
+    return { action: await this.done(handle), txHash };
+  }
+
+  /** An action this wallet already started paying: never send it, find out where it stands. */
+  private async reconcile(handle: EconomicActionHandle, record: PaymentRecord): Promise<Paid> {
+    const id = record.economicActionId;
+    const reported = (handle.action.execution as { txHash?: string } | null | undefined)?.txHash ?? null;
+
+    // AdaSouls has the payment already (or the action moved on without it): nothing to send or report.
+    if (!handle.payment) {
+      if (record.state === "sending" && reported) await this.store.put({ ...record, state: "sent", txHash: reported });
+      return { action: await this.done(handle), txHash: record.txHash ?? reported };
+    }
+
+    if (record.state === "sent" && record.txHash) return this.reportSent(id, record.txHash);
+
+    const found = record.payment && this.options.findPayment ? await this.options.findPayment(record.payment, new Date(record.sendingAt)) : null;
+    if (found) return this.reportSent(id, found);
+    throw new PaymentInDoubtError(
+      `a payment for ${id} was started at ${record.sendingAt} and its outcome wasn't recorded; it won't be sent again. If it went out, wallet.report("${id}", txHash); if you are sure it didn't, wallet.forget("${id}") and resume`,
+      id,
+      record.payment,
+      record.sendingAt
+    );
   }
 }
 

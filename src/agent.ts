@@ -1,9 +1,12 @@
 import type { AdaSoulsClient } from "./client.js";
-import { EconomicActionHandle } from "./economic-action-handle.js";
+import { EconomicActionHandle, paymentBody } from "./economic-action-handle.js";
 import { GuardedWallet, type GuardedWalletOptions, type SendPayment } from "./guarded-wallet.js";
-import { AdaSoulsApprovalPending, AdaSoulsNoDelegationError, AdaSoulsPolicyError } from "./errors.js";
+import { AdaSoulsApprovalPending, AdaSoulsNoDelegationError, AdaSoulsPolicyError, AdaSoulsValidationError } from "./errors.js";
 import { reportBody } from "./reports.js";
 import type {
+  AttestInput,
+  PaymentReport,
+  Receipt,
   AgentAuthority,
   AgentReport,
   AgentReports,
@@ -149,10 +152,38 @@ export class Agent {
     return input.wait && !handle.payment ? new EconomicActionHandle(this.client, await handle.wait()) : handle;
   }
 
-  /** Reports the transaction for a payment this agent made from its own wallet (see EconomicActionHandle.payment). */
-  async reportPayment(economicActionId: string, txHash: string): Promise<EconomicActionHandle> {
-    const action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}/payment`, { txHash });
+  /**
+   * Reports a payment this agent made itself (see
+   * EconomicActionHandle.payment): a transaction hash, or
+   * `{ rail: "stripe", reference: "pi_..." }` for a card payment.
+   */
+  async reportPayment(economicActionId: string, report: string | PaymentReport): Promise<EconomicActionHandle> {
+    const action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}/payment`, paymentBody(report));
     return new EconomicActionHandle(this.client, action);
+  }
+
+  // ---------- Receipts ----------
+
+  /** The receipt for one of this agent's settled actions (for a hire: `job.economicActionId`), with its log proofs. */
+  async receipt(economicActionId: string): Promise<Receipt> {
+    return this.client.get<Receipt>(`/economic-actions/${encodeURIComponent(economicActionId)}/receipt`);
+  }
+
+  /**
+   * Answers a receipt this agent is party to, once: as the buyer,
+   * `{ kind: "delivery", decision: "confirm" }` says the work arrived as
+   * agreed and credits the seller; as the seller, `kind: "payment"` says
+   * the money arrived. Declining records the disagreement and credits
+   * nothing. Needs this agent's own api key (org-wide keys are refused);
+   * a second answer gets a conflict.
+   */
+  async attest(receiptId: string, input: AttestInput): Promise<Receipt> {
+    if (input.reason !== undefined && input.reason.length > 500) throw new AdaSoulsValidationError("reason must be at most 500 characters");
+    return this.client.post<Receipt>(`/receipts/${encodeURIComponent(receiptId)}/attestations`, {
+      kind: input.kind,
+      decision: input.decision,
+      reason: input.reason,
+    });
   }
 
   /**

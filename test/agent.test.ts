@@ -278,3 +278,45 @@ describe("marketplace", () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("payment reports", () => {
+  it("a tx hash is sent as { txHash }, a Stripe payment by its rail and PaymentIntent", async () => {
+    const post = vi.fn().mockResolvedValue(baseAction({ status: "executing" }));
+    const agent = new Agent(fakeClient({ post }), "agent_1");
+    await agent.reportPayment("eco_1", "0xabc");
+    await agent.reportPayment("eco_1", { rail: "onchain", txHash: "0xdef" });
+    await agent.reportPayment("eco_1", { rail: "stripe", reference: "pi_3Nabc123" });
+    await new EconomicActionHandle(fakeClient({ post }), baseAction()).reportPayment({ rail: "stripe", reference: "pi_3Nxyz" });
+    expect(post.mock.calls.map((c) => c[1])).toEqual([{ txHash: "0xabc" }, { txHash: "0xdef" }, { rail: "stripe", reference: "pi_3Nabc123" }, { rail: "stripe", reference: "pi_3Nxyz" }]);
+  });
+
+  it("refuses a Stripe reference that isn't a PaymentIntent, before calling the API", async () => {
+    const post = vi.fn();
+    const agent = new Agent(fakeClient({ post }), "agent_1");
+    await expect(agent.reportPayment("eco_1", { rail: "stripe", reference: "ch_3Nabc" })).rejects.toThrow(/PaymentIntent/);
+    await expect(agent.reportPayment("eco_1", { rail: "wire" } as never)).rejects.toThrow(/unknown payment rail/);
+    await expect(agent.reportPayment("eco_1", "")).rejects.toThrow(/txHash/);
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("receipts", () => {
+  it("receipt() reads an action's receipt; attest() answers it with the API's body", async () => {
+    const get = vi.fn().mockResolvedValue({ id: "rcp_1" });
+    const post = vi.fn().mockResolvedValue({ id: "rcp_1", deliveryStatus: "confirmed" });
+    const agent = new Agent(fakeClient({ get, post }), "agent_1");
+    expect(await agent.receipt("eco_1")).toEqual({ id: "rcp_1" });
+    expect(get).toHaveBeenCalledWith("/economic-actions/eco_1/receipt");
+
+    expect(await agent.attest("rcp_1", { kind: "delivery", decision: "confirm" })).toMatchObject({ deliveryStatus: "confirmed" });
+    expect(post).toHaveBeenCalledWith("/receipts/rcp_1/attestations", { kind: "delivery", decision: "confirm", reason: undefined });
+    await agent.attest("rcp_1", { kind: "delivery", decision: "decline", reason: "empty answer" });
+    expect(post).toHaveBeenLastCalledWith("/receipts/rcp_1/attestations", { kind: "delivery", decision: "decline", reason: "empty answer" });
+  });
+
+  it("attest() refuses a reason the API would refuse", async () => {
+    const post = vi.fn();
+    await expect(new Agent(fakeClient({ post }), "agent_1").attest("rcp_1", { kind: "delivery", decision: "decline", reason: "x".repeat(501) })).rejects.toThrow(/500/);
+    expect(post).not.toHaveBeenCalled();
+  });
+});

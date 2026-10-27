@@ -46,6 +46,14 @@ export class AdaSoulsRateLimitError extends AdaSoulsError {
 }
 
 /**
+ * No response within the client's `timeoutMs`. Not in the documented
+ * taxonomy (no HTTP status came back). A POST that timed out may still
+ * have been applied: retry it with the same Idempotency-Key, or read the
+ * state back, rather than assuming it didn't happen.
+ */
+export class AdaSoulsTimeoutError extends AdaSoulsError {}
+
+/**
  * Not part of the documented taxonomy (that's for REST-layer failures) --
  * a client-side SDK convenience: execute() without an explicit
  * delegationId needs GET /agents/:id/authority to find one covering the
