@@ -85,6 +85,13 @@ export interface EconomicAction {
   status: EconomicActionStatus;
   result?: Record<string, unknown> | null;
   needsReconciliation: boolean;
+  /**
+   * When a self-paid authorization stops being payable (24 hours from
+   * authorization unless the organization set another window). Past it,
+   * AdaSouls ends the action as failed ("authorization expired"). Null:
+   * it doesn't expire. Absent from APIs older than authorization expiry.
+   */
+  expiresAt?: string | null;
   createdAt: string;
 }
 

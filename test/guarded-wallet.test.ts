@@ -285,6 +285,24 @@ describe("GuardedWallet: one authorization, one payment (B6)", () => {
     expect(send).toHaveBeenCalledTimes(3);
   });
 
+  it("refuses an authorization past the API's expiresAt, whatever its own cap says", async () => {
+    const send = vi.fn();
+    const expired = new Date(Date.now() - 60_000).toISOString();
+    const err = await fakeApi({ expiresAt: expired } as never).process(send, { store, maxAuthorizationAgeMs: Infinity }).resume("eco_1").catch((e) => e);
+    expect(err).toBeInstanceOf(AuthorizationTooOldError);
+    expect(err.message).toMatch(/expired at .*start a new payment/);
+    expect(send).not.toHaveBeenCalled();
+    expect(await store.get("eco_1")).toBeUndefined();
+  });
+
+  it("an action approved long after it was asked for is paid: its age counts from the approval", async () => {
+    const asked = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const approved = { createdAt: asked, approval: { id: "apr_1", status: "granted", decidedAt: new Date().toISOString() }, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
+    const send = vi.fn().mockResolvedValue("0xabc");
+    expect(await fakeApi(approved as never).process(send, { store }).resume("eco_1")).toMatchObject({ txHash: "0xabc" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses an authorization older than maxAuthorizationAgeMs, and sends nothing", async () => {
     const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
     const send = vi.fn();

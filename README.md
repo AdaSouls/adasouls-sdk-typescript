@@ -68,7 +68,7 @@ const wallet = agent.guardedWallet((payment) => walletClient.sendTransaction(erc
   store: new FilePaymentStore("./.adasouls/payments"),
   // Optional: find a payment a crash left in doubt, so it is reported instead of failing with PaymentInDoubtError.
   findPayment: async (payment, since) => myIndexer.findTransfer(payment, since),
-  maxAuthorizationAgeMs: 24 * 60 * 60 * 1000, // the default: refuse to pay an authorization older than a day
+  maxAuthorizationAgeMs: 24 * 60 * 60 * 1000, // the default: refuse to pay an authorization authorized more than a day ago (past the API's expiresAt is always refused)
 }); // the only place the signer is used
 await wallet.pay({ amount: "10", asset: "USDC", counterparty: { id: "alma:main:agent:vendor" } });
 await wallet.hire(listing.id, { service: "analyze-protocol" });
