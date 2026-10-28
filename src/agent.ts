@@ -152,7 +152,11 @@ export class Agent {
     return input.wait && !handle.payment ? new EconomicActionHandle(this.client, await handle.wait()) : handle;
   }
 
-  /** Reports the transaction for a payment this agent made from its own wallet (see EconomicActionHandle.payment). */
+  /**
+   * Reports a payment this agent made itself (see
+   * EconomicActionHandle.payment): a transaction hash, or for a card
+   * payment `{ rail: "stripe", reference: "pi_..." }`.
+   */
   async reportPayment(economicActionId: string, report: string | PaymentReport): Promise<EconomicActionHandle> {
     const action = await this.client.post<EconomicAction>(`/economic-actions/${encodeURIComponent(economicActionId)}/payment`, paymentBody(report));
     return new EconomicActionHandle(this.client, action);
@@ -212,6 +216,27 @@ export class Agent {
    */
   guardedWallet(send: SendPayment, options?: GuardedWalletOptions): GuardedWallet {
     return new GuardedWallet(this, send, options);
+  }
+
+  /**
+   * As the payee of a card payment: says the money arrived, which is
+   * what completes it. AdaSouls never sees a card payment settle, so this
+   * answer is the only evidence of it (and it is counted apart from
+   * on-chain payments). Check your own Stripe account first: confirm only
+   * a PaymentIntent that succeeded for the receipt's amount. Works for an
+   * on-chain payment too, as the payee's "payment received".
+   *
+   * `economicActionId` is the payer's action: for a hire it is the job's
+   * `economicActionId`; otherwise have the payer put it in the
+   * PaymentIntent's metadata when it asks you for one.
+   */
+  async confirmPayment(economicActionId: string): Promise<Receipt> {
+    return this.attest((await this.receipt(economicActionId)).id, { kind: "payment", decision: "confirm" });
+  }
+
+  /** As the payee: says a payment didn't arrive. For a card payment this fails it. */
+  async declinePayment(economicActionId: string, reason?: string): Promise<Receipt> {
+    return this.attest((await this.receipt(economicActionId)).id, { kind: "payment", decision: "decline", reason });
   }
 
   // ---------- Presence ----------

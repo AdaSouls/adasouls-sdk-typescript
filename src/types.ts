@@ -173,10 +173,12 @@ export interface PaymentInstruction {
 /**
  * How a payment the agent made itself was made, for reportPayment(). A
  * bare string is an on-chain transaction hash, same as
- * `{ rail: "onchain", txHash }`. Other rails are added here as the API
- * accepts them.
+ * `{ rail: "onchain", txHash }`. A card payment (an action whose
+ * payment's chain is a Stripe rail, e.g. "stripe-test") is reported by
+ * the Stripe PaymentIntent's id: `{ rail: "stripe", reference: "pi_..." }`.
+ * It counts once the payee confirms receiving it (confirmPayment()).
  */
-export type PaymentReport = { rail: "onchain"; txHash: string };
+export type PaymentReport = { rail: "onchain"; txHash: string } | { rail: "stripe"; reference: string };
 
 /** A marketplace listing as a buyer sees it. The seller's record is computed by AdaSouls from verified receipts. */
 export interface Listing {
@@ -189,7 +191,12 @@ export interface Listing {
   pricing: { model: "per_request"; amount: string; asset: string };
   endpoint: { protocol: "mcp" | "https"; url: string };
   provider: { organizationId: string; principalId: string; displayName: string };
-  reputation: { completedTransactions: number; disputeRate: number; receiptsConsidered: number; countedEnvs: string[] };
+  /**
+   * `completedTransactions` and `disputeRate` are on-chain payments only.
+   * `counterpartyConfirmed`: card payments, which rest on the counterparty's
+   * word alone, counted apart (absent from APIs older than card payments).
+   */
+  reputation: { completedTransactions: number; disputeRate: number; receiptsConsidered: number; countedEnvs: string[]; counterpartyConfirmed?: number };
 }
 
 export interface FindAgentsInput {
@@ -305,7 +312,13 @@ export interface Receipt {
   env: string;
   /** False when the two organizations share a member: related parties never count as outside vouching. */
   independent: boolean;
-  statement: Record<string, unknown>;
+  /**
+   * alma-core's ReceiptStatement. `alma-receipt/1` is always on-chain
+   * (`txHash`); `alma-receipt/2` says its `settlement`: "counterparty" is a
+   * card payment named by `reference` (the PaymentIntent), established only
+   * by the payee's payment attestation.
+   */
+  statement: Record<string, unknown> & { v: string; settlement?: "onchain" | "counterparty"; txHash?: string; reference?: string };
   digest: string;
   /** Only your own side's salt is returned; the other is null. */
   payerSalt: string | null;

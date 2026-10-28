@@ -290,7 +290,7 @@ describe("payment reports", () => {
   it("refuses a rail the API doesn't take, or no hash, before calling the API", async () => {
     const post = vi.fn();
     const agent = new Agent(fakeClient({ post }), "agent_1");
-    await expect(agent.reportPayment("eco_1", { rail: "stripe", reference: "pi_3N" } as never)).rejects.toThrow(/unknown payment rail/);
+    await expect(agent.reportPayment("eco_1", { rail: "wire", reference: "x" } as never)).rejects.toThrow(/unknown payment rail/);
     await expect(agent.reportPayment("eco_1", "")).rejects.toThrow(/txHash/);
     expect(post).not.toHaveBeenCalled();
   });
@@ -314,5 +314,28 @@ describe("receipts", () => {
     const post = vi.fn();
     await expect(new Agent(fakeClient({ post }), "agent_1").attest("rcp_1", { kind: "delivery", decision: "decline", reason: "x".repeat(501) })).rejects.toThrow(/500/);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("card payments", () => {
+  it("a Stripe report names its rail and PaymentIntent; a non-PaymentIntent is refused before calling the API", async () => {
+    const post = vi.fn().mockResolvedValue(baseAction({ status: "executing" }));
+    const agent = new Agent(fakeClient({ post }), "agent_1");
+    await agent.reportPayment("eco_1", { rail: "stripe", reference: "pi_3Nabc123" });
+    await new EconomicActionHandle(fakeClient({ post }), baseAction()).reportPayment({ rail: "stripe", reference: "pi_3Nxyz" });
+    expect(post.mock.calls.map((c) => c[1])).toEqual([{ rail: "stripe", reference: "pi_3Nabc123" }, { rail: "stripe", reference: "pi_3Nxyz" }]);
+    await expect(agent.reportPayment("eco_1", { rail: "stripe", reference: "ch_3Nabc" })).rejects.toThrow(/PaymentIntent/);
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it("the payee confirms or declines a payment by the payer's action id", async () => {
+    const get = vi.fn().mockResolvedValue({ id: "rcp_eco_1" });
+    const post = vi.fn().mockResolvedValue({ id: "rcp_eco_1", paymentStatus: "confirmed" });
+    const seller = new Agent(fakeClient({ get, post }), "agent_seller");
+    expect(await seller.confirmPayment("eco_1")).toMatchObject({ paymentStatus: "confirmed" });
+    expect(get).toHaveBeenCalledWith("/economic-actions/eco_1/receipt");
+    expect(post).toHaveBeenCalledWith("/receipts/rcp_eco_1/attestations", { kind: "payment", decision: "confirm", reason: undefined });
+    await seller.declinePayment("eco_1", "no charge in Stripe");
+    expect(post).toHaveBeenLastCalledWith("/receipts/rcp_eco_1/attestations", { kind: "payment", decision: "decline", reason: "no charge in Stripe" });
   });
 });

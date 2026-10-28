@@ -1,5 +1,5 @@
 import type { Agent } from "./agent.js";
-import type { EconomicActionHandle, WaitOptions } from "./economic-action-handle.js";
+import { paymentReportFor, type EconomicActionHandle, type WaitOptions } from "./economic-action-handle.js";
 import { AdaSoulsError } from "./errors.js";
 import { MemoryPaymentStore, type PaymentRecord, type PaymentStore } from "./payment-store.js";
 import type { CounterpartyRef, EconomicAction, HireInput, MarketplaceJob, PaymentInstruction } from "./types.js";
@@ -9,6 +9,11 @@ import type { CounterpartyRef, EconomicAction, HireInput, MarketplaceJob, Paymen
  * transaction hash. This is the only place the raw wallet is used: write
  * it once, around your signer, and hand the agent's tools a
  * GuardedWallet instead of the signer.
+ *
+ * For an agent that pays by card (its payment's chain is a Stripe rail,
+ * e.g. "stripe-test"): pay the PaymentIntent the payee created for this
+ * payment, with your own Stripe integration, and return its id (pi_...).
+ * It is reported on the Stripe rail.
  *
  * If it fails and you know for certain nothing was broadcast (a refused
  * signature, insufficient funds caught before sending), throw a
@@ -61,7 +66,7 @@ export interface GuardedWalletOptions {
 export interface Paid {
   /** The action in its latest state: confirmed when `wait` is on and the payment checked out. */
   action: EconomicAction;
-  /** The transaction this wallet sent; null when AdaSouls executes the agent's payments itself. */
+  /** The transaction this wallet sent (a PaymentIntent, pi_..., for a card payment); null when AdaSouls executes the agent's payments itself. */
   txHash: string | null;
 }
 
@@ -220,7 +225,7 @@ export class GuardedWallet {
   private async reportSent(id: string, txHash: string): Promise<Paid> {
     const record = await this.store.get(id);
     await this.store.put({ economicActionId: id, payment: record?.payment ?? null, sendingAt: record?.sendingAt ?? new Date().toISOString(), state: "sent", txHash });
-    const handle = await this.agent.reportPayment(id, txHash);
+    const handle = await this.agent.reportPayment(id, paymentReportFor(txHash));
     return { action: await this.done(handle), txHash };
   }
 
@@ -268,7 +273,7 @@ export class GuardedWallet {
     }
     await this.store.put({ ...claim, state: "sent", txHash });
     try {
-      await handle.reportPayment(txHash);
+      await handle.reportPayment(paymentReportFor(txHash));
     } catch (err) {
       throw new PaymentNotReportedError(`the payment for ${id} was sent (${txHash}) but reporting it failed: ${err instanceof Error ? err.message : String(err)}`, id, txHash);
     }
