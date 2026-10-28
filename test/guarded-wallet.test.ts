@@ -298,6 +298,17 @@ describe("GuardedWallet: one authorization, one payment (B6)", () => {
   });
 });
 
+describe("GuardedWallet paying by card", () => {
+  it("send returns the PaymentIntent it paid, and it is reported on the Stripe rail", async () => {
+    const card = action({ intent: { capability: "pay", amount: "12.50", asset: "USD" }, executionPlan: plan({ chain: "stripe-test", from: "acct_payer", to: "acct_payee", amount: "12.50", asset: "USD" }) } as never);
+    const { wallet: w, send, post } = wallet({ "/economic-actions": card, "/payment": action({ status: "executing" }) }, vi.fn().mockResolvedValue("pi_3Ncard"));
+    const paid = await w.pay({ amount: "12.50", asset: "USD", counterparty: { id: "alma:main:agent:vendor" }, delegationId: "del_1" } as never);
+    expect(send.mock.calls[0][0]).toMatchObject({ chain: "stripe-test", to: "acct_payee", amount: "12.50", asset: "USD" });
+    expect(post).toHaveBeenCalledWith("/economic-actions/eco_1/payment", { rail: "stripe", reference: "pi_3Ncard" });
+    expect(paid).toMatchObject({ txHash: "pi_3Ncard" });
+  });
+});
+
 describe("FilePaymentStore", () => {
   let dir: string;
   beforeEach(async () => (dir = await mkdtemp(join(tmpdir(), "adasouls-payments-"))));
