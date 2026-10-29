@@ -56,9 +56,11 @@ export interface GuardedWalletOptions {
   findPayment?: FindPayment;
   /**
    * Refuse to pay an authorization older than this, in milliseconds,
-   * counted from when the action was created. Default 24 hours. The API
-   * doesn't expire authorizations yet; this keeps a wallet from paying
-   * one that was forgotten for days. `Infinity` turns it off.
+   * counted from when it was authorized (when a person approved it, or
+   * when it was created). Default 24 hours; `Infinity` turns it off. An
+   * authorization past the API's own `expiresAt` is always refused: this
+   * is a cap on top of it, and the only check against APIs too old to
+   * send one.
    */
   maxAuthorizationAgeMs?: number;
 }
@@ -248,9 +250,15 @@ export class GuardedWallet {
             : null;
     if (off) throw new GuardedWalletMismatchError(`the authorization for ${id} isn't what was asked for (${off}); nothing was sent`, id);
 
-    const age = Date.now() - Date.parse(handle.action.createdAt);
+    const expiresAt = handle.action.expiresAt;
+    if (expiresAt && !(Date.now() < Date.parse(expiresAt))) {
+      throw new AuthorizationTooOldError(`the authorization for ${id} expired at ${expiresAt}; nothing was sent: start a new payment`, id, handle.action.createdAt);
+    }
+    // An approved action was authorized when it was approved, not when it was asked for.
+    const authorizedAt = (handle.action.approval as { decidedAt?: string } | null | undefined)?.decidedAt ?? handle.action.createdAt;
+    const age = Date.now() - Date.parse(authorizedAt);
     if (!(age <= this.maxAgeMs)) {
-      throw new AuthorizationTooOldError(`the authorization for ${id} is from ${handle.action.createdAt}, older than this wallet pays (${this.maxAgeMs} ms); nothing was sent`, id, handle.action.createdAt);
+      throw new AuthorizationTooOldError(`the authorization for ${id} is from ${authorizedAt}, older than this wallet pays (${this.maxAgeMs} ms); nothing was sent`, id, handle.action.createdAt);
     }
 
     const frozen = Object.freeze({ ...payment });
