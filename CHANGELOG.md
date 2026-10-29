@@ -1,5 +1,11 @@
 # @adasouls/sdk
 
+## 0.8.0
+
+### Minor Changes
+
+- [#14](https://github.com/AdaSouls/adasouls-sdk-typescript/pull/14) [`d1b64eb`](https://github.com/AdaSouls/adasouls-sdk-typescript/commit/d1b64ebcedcf15f87c83254483319e274b2befe6) Thanks [@MatiFalcone](https://github.com/MatiFalcone)! - Authorizations expire (AdaSouls/adasouls-api#17): `EconomicAction.expiresAt` says when a self-paid authorization stops being payable, and the guarded wallet refuses to send one past it (`AuthorizationTooOldError`, nothing sent). Its own `maxAuthorizationAgeMs` cap now counts from when the action was authorized (the approval's `decidedAt`), not from when it was asked for, so an action a person approved late is paid.
+
 ## 0.7.0
 
 ### Minor Changes
