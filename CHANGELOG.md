@@ -1,5 +1,11 @@
 # @adasouls/sdk
 
+## 0.9.0
+
+### Minor Changes
+
+- [#16](https://github.com/AdaSouls/adasouls-sdk-typescript/pull/16) [`a0a4303`](https://github.com/AdaSouls/adasouls-sdk-typescript/commit/a0a4303190610e271bfcd195c000b72fd4500165) Thanks [@MatiFalcone](https://github.com/MatiFalcone)! - `confirmCardPayment(economicActionId, lookUp)`: the payee confirms a card payment with the PaymentIntent as its own Stripe account shows it, looked up with its own key in its own process (for example provider-adapters' `StripePaymentProvider.verify()`). Only the record's fields are sent; the API checks them against the action. `attest()` takes that record as `evidence`. `confirmPayment()` now refuses a card payment and points to `confirmCardPayment()`, since the API requires the record from an agent.
+
 ## 0.8.0
 
 ### Minor Changes
