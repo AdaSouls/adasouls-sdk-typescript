@@ -5,6 +5,8 @@ import { AdaSoulsApprovalPending, AdaSoulsNoDelegationError, AdaSoulsPolicyError
 import { reportBody } from "./reports.js";
 import type {
   AttestInput,
+  LookUpPaymentIntent,
+  StripePaymentRecord,
   PaymentReport,
   Receipt,
   AgentAuthority,
@@ -183,6 +185,7 @@ export class Agent {
       kind: input.kind,
       decision: input.decision,
       reason: input.reason,
+      ...(input.evidence ? { evidence: input.evidence } : {}),
     });
   }
 
@@ -219,19 +222,56 @@ export class Agent {
   }
 
   /**
-   * As the payee of a card payment: says the money arrived, which is
-   * what completes it. AdaSouls never sees a card payment settle, so this
-   * answer is the only evidence of it (and it is counted apart from
-   * on-chain payments). Check your own Stripe account first: confirm only
-   * a PaymentIntent that succeeded for the receipt's amount. Works for an
-   * on-chain payment too, as the payee's "payment received".
+   * As the payee: says a payment arrived (an on-chain one's "payment
+   * received"). For a card payment use confirmCardPayment(): an agent's
+   * confirmation of one must carry what its Stripe account shows.
    *
    * `economicActionId` is the payer's action: for a hire it is the job's
    * `economicActionId`; otherwise have the payer put it in the
    * PaymentIntent's metadata when it asks you for one.
    */
   async confirmPayment(economicActionId: string): Promise<Receipt> {
-    return this.attest((await this.receipt(economicActionId)).id, { kind: "payment", decision: "confirm" });
+    const receipt = await this.receipt(economicActionId);
+    if (receipt.statement.settlement === "counterparty") {
+      throw new AdaSoulsValidationError("this is a card payment: confirm it with confirmCardPayment(), which sends what your Stripe account shows");
+    }
+    return this.attest(receipt.id, { kind: "payment", decision: "confirm" });
+  }
+
+  /**
+   * As the payee of a card payment: says the money arrived, which is what
+   * completes it. AdaSouls holds no Stripe key and never sees a card
+   * payment settle, so `lookUp` checks your own Stripe account, with your
+   * own key, in this process: the key never reaches the SDK or AdaSouls,
+   * only the record it returns does. For example, with
+   * @adasouls/provider-adapters:
+   *
+   *   const stripe = new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!);
+   *   await seller.confirmCardPayment(action.id, (pi) => stripe.verify(pi));
+   *
+   * The API refuses the confirmation, with the reason, unless the record
+   * is the reported PaymentIntent, succeeded, in test mode, for the
+   * receipt's amount and currency, with metadata.action_id naming the
+   * action, and created after it.
+   */
+  async confirmCardPayment(economicActionId: string, lookUp: LookUpPaymentIntent): Promise<Receipt> {
+    const receipt = await this.receipt(economicActionId);
+    const reference = receipt.statement.reference;
+    if (receipt.statement.settlement !== "counterparty" || typeof reference !== "string") {
+      throw new AdaSoulsValidationError("this receipt isn't for a card payment: use confirmPayment()");
+    }
+    const r = await lookUp(reference);
+    // Only the record's fields leave this process, never anything else the lookup returned.
+    const evidence: StripePaymentRecord = {
+      reference: r.reference,
+      status: r.status,
+      amount: r.amount,
+      currency: r.currency,
+      createdAt: r.createdAt,
+      livemode: r.livemode,
+      ...(r.actionId ? { actionId: r.actionId } : {}),
+    };
+    return this.attest(receipt.id, { kind: "payment", decision: "confirm", evidence });
   }
 
   /** As the payee: says a payment didn't arrive. For a card payment this fails it. */

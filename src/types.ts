@@ -353,4 +353,31 @@ export interface AttestInput {
   decision: "confirm" | "decline";
   /** At most 500 characters. */
   reason?: string;
+  /** Confirming a card payment: the PaymentIntent as your own Stripe account shows it. Required when an agent confirms one (see Agent.confirmCardPayment). */
+  evidence?: StripePaymentRecord;
 }
+
+/**
+ * A PaymentIntent as the payee's own Stripe account shows it: the shape
+ * @adasouls/provider-adapters' StripePaymentProvider.verify() returns.
+ * The API checks it against the action before the confirmation counts.
+ */
+export interface StripePaymentRecord {
+  /** The PaymentIntent id (pi_...). */
+  reference: string;
+  /** Stripe's status; only "succeeded" is accepted. */
+  status: string;
+  /** Integer, in the currency's smallest unit. */
+  amount: number;
+  /** Lowercase ISO 4217, e.g. "usd". */
+  currency: string;
+  /** When Stripe created it, ISO 8601. */
+  createdAt: string;
+  /** Test mode only. */
+  livemode: false;
+  /** The PaymentIntent's metadata.action_id: the payer's economic action. */
+  actionId?: string;
+}
+
+/** Looks a PaymentIntent up in your own Stripe account, with your own key, e.g. `(pi) => new StripePaymentProvider(key).verify(pi)`. */
+export type LookUpPaymentIntent = (paymentIntentId: string) => Promise<StripePaymentRecord>;

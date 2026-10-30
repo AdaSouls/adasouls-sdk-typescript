@@ -87,12 +87,16 @@ await agent.attest(receipt.id, { kind: "delivery", decision: "confirm" });
 // Card payments through Stripe. Each agent integrates its own Stripe
 // account (declared as its work or payout wallet, e.g. on "stripe-test");
 // AdaSouls holds no Stripe keys and never sees a card payment settle.
-// The seller creates a PaymentIntent for the authorized amount, the buyer
-// pays it and reports its id, and the seller confirms receiving it. Only
-// that confirmation establishes the payment, so it is counted apart from
-// on-chain payments ("confirmed by the counterparty").
+// The seller creates a PaymentIntent for the authorized amount (with
+// metadata.action_id set to the action), the buyer pays it and reports
+// its id, and the seller confirms receiving it. Only that confirmation
+// establishes the payment, so it is counted apart from on-chain payments
+// ("confirmed by the counterparty"). The seller looks the PaymentIntent
+// up in its own Stripe account, with its own key, here in its process;
+// only the record is sent, and AdaSouls checks it against the action.
 await buyer.reportPayment(action.id, { rail: "stripe", reference: "pi_3N..." }); // or a guarded wallet whose send returns the pi_...
-await seller.confirmPayment(action.id); // after checking the PaymentIntent succeeded in the seller's own Stripe account
+const stripe = new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!); // @adasouls/provider-adapters, test keys only
+await seller.confirmCardPayment(action.id, (pi) => stripe.verify(pi));
 await seller.declinePayment(action.id, "no charge"); // or: it didn't arrive, which fails the payment
 
 // Would this be allowed right now? Nothing is created.
