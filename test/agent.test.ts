@@ -329,7 +329,7 @@ describe("card payments", () => {
   });
 
   it("the payee confirms or declines a payment by the payer's action id", async () => {
-    const get = vi.fn().mockResolvedValue({ id: "rcp_eco_1" });
+    const get = vi.fn().mockResolvedValue({ id: "rcp_eco_1", statement: { v: "alma-receipt/2", settlement: "onchain", txHash: "0xabc" } });
     const post = vi.fn().mockResolvedValue({ id: "rcp_eco_1", paymentStatus: "confirmed" });
     const seller = new Agent(fakeClient({ get, post }), "agent_seller");
     expect(await seller.confirmPayment("eco_1")).toMatchObject({ paymentStatus: "confirmed" });
@@ -337,5 +337,31 @@ describe("card payments", () => {
     expect(post).toHaveBeenCalledWith("/receipts/rcp_eco_1/attestations", { kind: "payment", decision: "confirm", reason: undefined });
     await seller.declinePayment("eco_1", "no charge in Stripe");
     expect(post).toHaveBeenLastCalledWith("/receipts/rcp_eco_1/attestations", { kind: "payment", decision: "decline", reason: "no charge in Stripe" });
+  });
+
+  const cardReceipt = { id: "rcp_eco_2", statement: { v: "alma-receipt/2", settlement: "counterparty", reference: "pi_3Ncard" } };
+  const record = { reference: "pi_3Ncard", status: "succeeded", amount: 1250, currency: "usd", createdAt: "2026-10-30T10:00:00.000Z", livemode: false as const, actionId: "eco_2" };
+
+  it("a card payment is confirmed with what the payee's own Stripe account shows; the key stays with the lookup", async () => {
+    const get = vi.fn().mockResolvedValue(cardReceipt);
+    const post = vi.fn().mockResolvedValue({ id: "rcp_eco_2", paymentStatus: "confirmed" });
+    const seller = new Agent(fakeClient({ get, post }), "agent_seller");
+    // A lookup may return more than the record (a whole Stripe object): only the record's fields are sent.
+    const lookUp = vi.fn().mockResolvedValue({ ...record, client_secret: "pi_3Ncard_secret_x", customer: "cus_1" });
+
+    expect(await seller.confirmCardPayment("eco_2", lookUp)).toMatchObject({ paymentStatus: "confirmed" });
+    expect(lookUp).toHaveBeenCalledWith("pi_3Ncard");
+    expect(post).toHaveBeenCalledWith("/receipts/rcp_eco_2/attestations", { kind: "payment", decision: "confirm", reason: undefined, evidence: record });
+  });
+
+  it("confirmPayment() refuses a card payment, and confirmCardPayment() an on-chain one, before calling the API", async () => {
+    const post = vi.fn();
+    const card = new Agent(fakeClient({ get: vi.fn().mockResolvedValue(cardReceipt), post }), "agent_seller");
+    await expect(card.confirmPayment("eco_2")).rejects.toThrow(/confirmCardPayment/);
+    const onchain = new Agent(fakeClient({ get: vi.fn().mockResolvedValue({ id: "rcp_1", statement: { v: "alma-receipt/1", txHash: "0xabc" } }), post }), "agent_seller");
+    const lookUp = vi.fn();
+    await expect(onchain.confirmCardPayment("eco_1", lookUp)).rejects.toThrow(/isn't for a card payment/);
+    expect(lookUp).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
   });
 });
